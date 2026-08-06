@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project source data (keep downloaded Bronze artifacts out of Git)
+data/**
+!data/.gitkeep
+!data/bronze/
+!data/bronze/.gitkeep

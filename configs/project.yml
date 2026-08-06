@@ -1,0 +1,35 @@
+project:
+  name: water-stress-soybean
+  version: "0.1.0"
+  timezone: America/Sao_Paulo
+
+study:
+  municipality_name: Sorriso
+  municipality_code: "5107925"
+  start_date: "2023-09-01"
+  end_date: "2024-04-30"
+
+ibge:
+  base_url: https://servicodados.ibge.gov.br/api/v3/malhas/municipios
+  quality: minima
+
+nasa_power:
+  base_url: https://power.larc.nasa.gov/api/temporal/daily/point
+  community: AG
+  time_standard: UTC
+  parameters:
+    - T2M
+    - T2M_MAX
+    - T2M_MIN
+    - RH2M
+    - WS2M
+    - ALLSKY_SFC_SW_DWN
+    - PRECTOTCORR
+
+http:
+  timeout_seconds: 120
+  max_attempts: 3
+  backoff_seconds: 1
+
+storage:
+  root_path: data/bronze
