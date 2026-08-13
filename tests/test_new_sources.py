@@ -73,8 +73,13 @@ def test_soilgrids_builds_requests_and_downloads_twelve_files(
 
 
 def test_soilgrids_rejects_invalid_tiff() -> None:
-    with pytest.raises(ValueError, match="not a valid TIFF"):
+    with pytest.raises(ValueError, match="not a valid TIFF or BigTIFF"):
         soilgrids.validate_tiff(b"invalid")
+
+
+@pytest.mark.parametrize("signature", [b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"])
+def test_tiff_validator_accepts_classic_tiff_and_bigtiff(signature: bytes) -> None:
+    soilgrids.validate_tiff(signature + b"metadata")
 
 
 def test_mapbiomas_builds_official_url_and_downloads_classification(
@@ -101,7 +106,7 @@ def test_mapbiomas_builds_official_url_and_downloads_classification(
 def test_mapbiomas_rejects_invalid_tiff_and_removes_artifact(settings: Settings) -> None:
     storage = LocalStorageClient()
 
-    with pytest.raises(ValueError, match="not a valid TIFF"):
+    with pytest.raises(ValueError, match="not a valid TIFF or BigTIFF"):
         mapbiomas.ingest(
             settings,
             http=SourceHttpClient([b"invalid"]),

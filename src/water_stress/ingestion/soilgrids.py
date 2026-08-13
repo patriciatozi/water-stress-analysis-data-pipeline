@@ -73,8 +73,14 @@ def artifact_path(settings: Settings, property_name: str, depth: str) -> Path:
 
 
 def validate_tiff(content: bytes) -> None:
-    if len(content) < 8 or content[:4] not in {b"II*\x00", b"MM\x00*"}:
-        raise ValueError("SoilGrids response is not a valid TIFF")
+    valid_signatures = {
+        b"II*\x00",  # little-endian TIFF
+        b"MM\x00*",  # big-endian TIFF
+        b"II+\x00",  # little-endian BigTIFF
+        b"MM\x00+",  # big-endian BigTIFF
+    }
+    if len(content) < 8 or content[:4] not in valid_signatures:
+        raise ValueError("Source response is not a valid TIFF or BigTIFF")
 
 
 def ingest(
