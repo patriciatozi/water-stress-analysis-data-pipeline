@@ -100,6 +100,7 @@ class HttpSettings(BaseModel):
 
 class StorageSettings(BaseModel):
     root_path: Path
+    silver_root_path: Path = Path("data/silver")
 
 
 class Settings(BaseSettings):

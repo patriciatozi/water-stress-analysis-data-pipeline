@@ -11,7 +11,14 @@ from water_stress.config import Settings, load_settings
 def settings(tmp_path: Path) -> Settings:
     loaded = load_settings(Path("configs/project.yml"))
     return loaded.model_copy(
-        update={"storage": loaded.storage.model_copy(update={"root_path": tmp_path / "bronze"})}
+        update={
+            "storage": loaded.storage.model_copy(
+                update={
+                    "root_path": tmp_path / "bronze",
+                    "silver_root_path": tmp_path / "silver",
+                }
+            )
+        }
     )
 
 

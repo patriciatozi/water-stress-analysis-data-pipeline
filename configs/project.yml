@@ -63,3 +63,4 @@ http:
 
 storage:
   root_path: data/bronze
+  silver_root_path: data/silver

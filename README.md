@@ -26,7 +26,8 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Meteorologia NASA POWER | Concluído e validado | JSON diário para um ponto representativo interno ao município |
 | SoilGrids | Concluído e validado | 12 recortes GeoTIFF via WCS |
 | Sentinel-2 L2A | Implementado | Catálogo STAC completo e download de quatro COGs para três cenas |
-| Camada Silver | Não iniciada | Padronização, recortes, unidades e qualidade |
+| Silver NASA POWER | Concluído e validado | Parquet diário particionado por ano, schema e relatório de qualidade |
+| Silver geoespacial | Não iniciada | Recortes, harmonização espacial, unidades e qualidade |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | MapBiomas e INMET | Fora do escopo atual | Fontes candidatas para fases posteriores |
 
@@ -82,6 +83,7 @@ src/water_stress/
     └── run_ingestion.py        # CLI e ordem de execução
 tests/                          # testes unitários e de integração simulada
 data/bronze/                    # dados locais ignorados pelo Git
+data/silver/                    # dados padronizados locais ignorados pelo Git
 ```
 
 Fluxo atual:
@@ -95,6 +97,8 @@ Limite municipal IBGE
       └──→ geometria da busca → Sentinel-2 STAC → COGs selecionados
       ↓
 Arquivos originais + manifestos na camada Bronze
+      ↓
+Transformação NASA POWER → validações → Parquet Silver por ano
 ```
 
 ## Organização da camada Bronze
@@ -125,6 +129,33 @@ data/bronze/
 ```
 
 Cada manifesto registra a origem, URL, parâmetros, instante UTC, status HTTP, tamanho, SHA-256, versão do projeto e hash da configuração. A execução padrão reutiliza somente arquivos cujo checksum e fingerprint da requisição continuam válidos. A opção `--force` cria uma versão imutável sem sobrescrever o artefato anterior.
+
+## Camada Silver NASA POWER
+
+A transformação meteorológica produz uma linha para cada data do período configurado, inclui latitude e longitude, converte o valor de preenchimento `-999` em `null` e usa nomes semânticos em `snake_case`:
+
+| Coluna | Unidade |
+|---|---|
+| `date` | data UTC |
+| `latitude` | graus norte |
+| `longitude` | graus leste |
+| `temperature_mean_c` | °C |
+| `temperature_max_c` | °C |
+| `temperature_min_c` | °C |
+| `relative_humidity_pct` | % |
+| `wind_speed_ms` | m/s |
+| `solar_radiation_mj_m2_day` | MJ/m²/dia |
+| `precipitation_mm_day` | mm/dia |
+
+As unidades e descrições são armazenadas nos metadados dos campos Parquet e também em `_schema.json`. O arquivo `_quality.json` registra quantidade de linhas, datas duplicadas e valores ausentes por coluna.
+
+```text
+data/silver/nasa_power/daily/municipality_code=5107925/
+├── _schema.json
+├── _quality.json
+├── year=2023/part-000.parquet
+└── year=2024/part-000.parquet
+```
 
 ## Preparação do ambiente
 
@@ -176,6 +207,12 @@ Usar outra configuração:
 uv run python -m water_stress.pipelines.run_ingestion --config caminho/project.yml
 ```
 
+Transformar o Bronze NASA POWER em Silver:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source nasa-power
+```
+
 ## Configuração
 
 O arquivo [configs/project.yml](configs/project.yml) concentra área, período, propriedades, bandas, limites de nuvens, endpoints e política HTTP. Variáveis de ambiente com prefixo `WATER_STRESS_` podem substituir valores simples, por exemplo:
@@ -197,12 +234,13 @@ uv run mypy src tests
 
 Última validação local desta etapa:
 
-- 31 testes aprovados;
-- cobertura total de 86%;
+- 41 testes aprovados;
+- cobertura total superior a 85%;
 - Ruff aprovado;
 - mypy em modo estrito aprovado;
 - smoke test real do SoilGrids aprovado;
 - consulta e seleção reais do catálogo Sentinel-2 aprovadas.
+- transformação real NASA POWER aprovada: 243 datas, duas partições anuais, sem duplicidades ou nulos.
 
 Os testes automatizados não dependem da internet: as respostas HTTP e downloads são simulados. Smoke tests reais devem ser executados conscientemente, pois podem transferir arquivos grandes.
 
@@ -218,13 +256,12 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 
 ## Próximas etapas sugeridas
 
-1. Criar a camada Silver meteorológica com schema diário, unidades e validações.
-2. Recortar e harmonizar os rasters SoilGrids por grade espacial.
-3. Aplicar máscara SCL e calcular NDVI/NDMI para as cenas Sentinel-2.
-4. Criar uma grade comum e integrar clima, solo e índices espectrais.
-5. Implementar ETo, ETc, balanço hídrico, déficit e score de risco com premissas documentadas.
-6. Adicionar notebooks exploratórios e validação com fontes observacionais.
-7. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
+1. Recortar e harmonizar os rasters SoilGrids por grade espacial.
+2. Aplicar máscara SCL e calcular NDVI/NDMI para as cenas Sentinel-2.
+3. Criar uma grade comum e integrar clima, solo e índices espectrais.
+4. Implementar ETo, ETc, balanço hídrico, déficit e score de risco com premissas documentadas.
+5. Adicionar notebooks exploratórios e validação com fontes observacionais.
+6. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
 
 ## Como colaborar
 
