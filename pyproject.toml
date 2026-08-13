@@ -28,6 +28,7 @@ notebook = [
   "jupyterlab>=4.2,<5",
   "matplotlib>=3.9,<4",
   "pandas>=2.2,<3",
+  "rasterio>=1.4,<2",
 ]
 
 [build-system]

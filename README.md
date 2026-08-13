@@ -213,6 +213,27 @@ Transformar o Bronze NASA POWER em Silver:
 uv run python -m water_stress.pipelines.run_transformation --source nasa-power
 ```
 
+### Notebooks exploratórios
+
+Os notebooks usam somente caminhos relativos e podem ser abertos na raiz do repositório:
+
+```bash
+uv run --group notebook jupyter lab notebooks/
+```
+
+| Notebook | Camada e objetivo |
+|---|---|
+| `01_explore_ibge_boundary.ipynb` | Bronze: geometria, extensão, ponto representativo e manifesto IBGE |
+| `02_explore_nasa_power_bronze.ipynb` | Bronze: estrutura, unidades, qualidade e séries originais NASA POWER |
+| `02_explore_nasa_power.ipynb` | Silver: schema, qualidade, precipitação, temperatura e sequências secas |
+| `03_explore_soilgrids.ipynb` | Bronze: metadados, unidades, estatísticas e mapas dos 12 GeoTIFFs |
+| `04_explore_sentinel_2.ipynb` | Bronze: catálogo STAC, COGs, SCL e diagnóstico exploratório de NDVI/NDMI |
+
+O notebook Sentinel-2 pode ser aberto sem os arquivos locais: nesse caso, ele informa o comando
+de ingestão e mantém as análises pendentes. Os índices espectrais calculados nele são apenas
+diagnósticos; máscara de qualidade, recorte municipal e harmonização espacial serão formalizados
+na camada Silver.
+
 ## Configuração
 
 O arquivo [configs/project.yml](configs/project.yml) concentra área, período, propriedades, bandas, limites de nuvens, endpoints e política HTTP. Variáveis de ambiente com prefixo `WATER_STRESS_` podem substituir valores simples, por exemplo:
