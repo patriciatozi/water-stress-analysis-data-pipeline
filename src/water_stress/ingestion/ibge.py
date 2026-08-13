@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from shapely.geometry import shape
+from shapely.geometry.base import BaseGeometry
 
 from water_stress.config import Settings
 from water_stress.http import HttpGetter
@@ -67,6 +68,18 @@ def representative_point(content: bytes) -> tuple[float, float]:
         raise ValueError("IBGE response contains an empty or invalid geometry")
     point = geometry.representative_point()
     return point.y, point.x
+
+
+def geometry_from_geojson(content: bytes) -> BaseGeometry:
+    document = validate_geojson(content)
+    if document["type"] == "FeatureCollection":
+        features = document.get("features")
+        if not isinstance(features, list) or not features:
+            raise ValueError("IBGE FeatureCollection has no features")
+        return shape(features[0]["geometry"])
+    if document["type"] == "Feature":
+        return shape(document["geometry"])
+    return shape(document)
 
 
 def ingest(

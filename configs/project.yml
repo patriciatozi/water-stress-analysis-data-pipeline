@@ -26,6 +26,36 @@ nasa_power:
     - ALLSKY_SFC_SW_DWN
     - PRECTOTCORR
 
+soilgrids:
+  base_url: https://maps.isric.org/mapserv
+  service: WCS
+  version: 2.0.1
+  format: GEOTIFF_INT16
+  source_crs: EPSG:4326
+  subset_crs: ESRI:54052
+  quantile: Q0.5
+  properties:
+    - clay
+    - sand
+    - soc
+    - bdod
+  depths:
+    - 0-5cm
+    - 5-15cm
+    - 15-30cm
+
+sentinel_2:
+  search_url: https://earth-search.aws.element84.com/v1/search
+  collection: sentinel-2-l2a
+  max_cloud_cover: 30
+  representative_scenes: 3
+  page_limit: 100
+  assets:
+    - red
+    - nir
+    - swir16
+    - scl
+
 http:
   timeout_seconds: 120
   max_attempts: 3

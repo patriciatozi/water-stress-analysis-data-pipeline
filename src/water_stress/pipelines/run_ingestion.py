@@ -8,7 +8,7 @@ from pathlib import Path
 
 from water_stress.config import Settings, load_settings
 from water_stress.http import HttpClient, HttpGetter
-from water_stress.ingestion import ibge, nasa_power
+from water_stress.ingestion import ibge, nasa_power, sentinel_2, soilgrids
 from water_stress.logging import configure_logging
 from water_stress.models import IngestionResult
 from water_stress.storage import LocalStorageClient
@@ -48,6 +48,28 @@ def run(
                         dry_run=True,
                     )
                 )
+            if source in {"all", "soilgrids"}:
+                results.extend(
+                    soilgrids.ingest(
+                        settings,
+                        boundary=b'{"type":"Polygon","coordinates":[]}',
+                        http=http_client,
+                        storage=storage,
+                        force=force,
+                        dry_run=True,
+                    )
+                )
+            if source in {"all", "sentinel-2"}:
+                results.extend(
+                    sentinel_2.ingest(
+                        settings,
+                        boundary=b'{"type":"Polygon","coordinates":[]}',
+                        http=http_client,
+                        storage=storage,
+                        force=force,
+                        dry_run=True,
+                    )
+                )
             return results
 
         ibge_content: bytes
@@ -61,7 +83,7 @@ def run(
             boundary_path = ibge.artifact_path(settings)
             if not storage.exists(boundary_path):
                 raise FileNotFoundError(
-                    "NASA POWER ingestion requires the IBGE Bronze boundary; "
+                    "This ingestion source requires the IBGE Bronze boundary; "
                     "run --source ibge first"
                 )
             ibge_content = storage.read_bytes(boundary_path)
@@ -79,6 +101,26 @@ def run(
                     dry_run=False,
                 )
             )
+        if source in {"all", "soilgrids"}:
+            results.extend(
+                soilgrids.ingest(
+                    settings,
+                    boundary=ibge_content,
+                    http=http_client,
+                    storage=storage,
+                    force=force,
+                )
+            )
+        if source in {"all", "sentinel-2"}:
+            results.extend(
+                sentinel_2.ingest(
+                    settings,
+                    boundary=ibge_content,
+                    http=http_client,
+                    storage=storage,
+                    force=force,
+                )
+            )
         return results
     finally:
         if own_http:
@@ -89,7 +131,11 @@ def run(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ingest MVP source data into Bronze storage")
     parser.add_argument("--config", type=Path, default=Path("configs/project.yml"))
-    parser.add_argument("--source", choices=("all", "ibge", "nasa-power"), default="all")
+    parser.add_argument(
+        "--source",
+        choices=("all", "ibge", "nasa-power", "soilgrids", "sentinel-2"),
+        default="all",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser

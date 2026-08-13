@@ -57,6 +57,41 @@ class NasaPowerSettings(BaseModel):
         return value
 
 
+class SoilGridsSettings(BaseModel):
+    base_url: HttpUrl
+    service: str = "WCS"
+    version: str = "2.0.1"
+    format: str = "GEOTIFF_INT16"
+    source_crs: str = "EPSG:4326"
+    subset_crs: str = "ESRI:54052"
+    quantile: str = "Q0.5"
+    properties: list[str] = Field(min_length=1)
+    depths: list[str] = Field(min_length=1)
+
+    @field_validator("properties", "depths")
+    @classmethod
+    def validate_unique_values(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)) or any(not item.strip() for item in value):
+            raise ValueError("SoilGrids values must be unique and non-blank")
+        return value
+
+
+class Sentinel2Settings(BaseModel):
+    search_url: HttpUrl
+    collection: str = Field(min_length=1)
+    max_cloud_cover: float = Field(ge=0, le=100)
+    representative_scenes: int = Field(ge=1)
+    page_limit: int = Field(ge=1, le=1000)
+    assets: list[str] = Field(min_length=1)
+
+    @field_validator("assets")
+    @classmethod
+    def validate_assets(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)) or any(not item.strip() for item in value):
+            raise ValueError("Sentinel-2 assets must be unique and non-blank")
+        return value
+
+
 class HttpSettings(BaseModel):
     timeout_seconds: float = Field(gt=0)
     max_attempts: int = Field(ge=1)
@@ -78,6 +113,8 @@ class Settings(BaseSettings):
     study: StudySettings
     ibge: IbgeSettings
     nasa_power: NasaPowerSettings
+    soilgrids: SoilGridsSettings
+    sentinel_2: Sentinel2Settings
     http: HttpSettings
     storage: StorageSettings
     config_hash: str = Field(exclude=True)

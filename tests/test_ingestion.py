@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from water_stress.config import Settings
-from water_stress.http import HttpResponse
+from water_stress.http import HttpDownload, HttpResponse
 from water_stress.ingestion import ibge, nasa_power
 from water_stress.models import IngestionState
-from water_stress.storage import LocalStorageClient
+from water_stress.storage import LocalStorageClient, StorageClient
 
 
 class StubHttpClient:
@@ -20,6 +22,16 @@ class StubHttpClient:
         self.calls.append(kwargs)
         content = self.responses.pop(0)
         return HttpResponse(content, 200, "application/json", str(kwargs["url"]))
+
+    def post(self, **kwargs: object) -> HttpResponse:
+        return self.get(**kwargs)
+
+    def download(self, **kwargs: object) -> HttpDownload:
+        content = self.responses.pop(0)
+        storage = cast(StorageClient, kwargs["storage"])
+        path = cast(Path, kwargs["path"])
+        checksum, size, header = storage.write_chunks(path, [content])
+        return HttpDownload(200, "image/tiff", str(kwargs["url"]), checksum, size, header)
 
 
 def test_builds_exact_ibge_request(settings: Settings) -> None:

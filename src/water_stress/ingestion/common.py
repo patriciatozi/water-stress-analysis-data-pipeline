@@ -91,3 +91,35 @@ def persist_download(
         size_bytes=len(content),
         state=IngestionState.DOWNLOADED,
     )
+
+
+def persist_download_manifest(
+    *,
+    source: str,
+    storage: StorageClient,
+    artifact_path: Path,
+    manifest_path: Path,
+    checksum: str,
+    size_bytes: int,
+    manifest: dict[str, Any],
+) -> IngestionResult:
+    completed_manifest = {
+        **manifest,
+        "downloaded_at_utc": datetime.now(UTC).isoformat(),
+        "size_bytes": size_bytes,
+        "sha256": checksum,
+    }
+    storage.write_bytes(
+        manifest_path,
+        (
+            json.dumps(completed_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode(),
+    )
+    return IngestionResult(
+        source=source,
+        artifact_path=artifact_path,
+        manifest_path=manifest_path,
+        checksum=checksum,
+        size_bytes=size_bytes,
+        state=IngestionState.DOWNLOADED,
+    )

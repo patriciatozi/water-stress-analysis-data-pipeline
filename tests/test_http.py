@@ -1,10 +1,11 @@
-from __future__ import annotations
+from pathlib import Path
 
 import httpx
 import pytest
 
 from water_stress.config import HttpSettings
 from water_stress.http import HttpClient, HttpRequestError
+from water_stress.storage import LocalStorageClient
 
 
 def http_settings(*, attempts: int = 3) -> HttpSettings:
@@ -79,3 +80,28 @@ def test_retries_timeout_then_raises() -> None:
             source="test", url="https://example.test"
         )
     assert attempts == 2
+
+
+def test_streams_download_to_storage(tmp_path: Path) -> None:
+    content = b"II*\x00" + (b"chunk" * 1000)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            content=content,
+            headers={"content-type": "image/tiff"},
+            request=request,
+        )
+    )
+    output = tmp_path / "asset.tif"
+
+    result = HttpClient(http_settings(), client=httpx.Client(transport=transport)).download(
+        source="sentinel_2",
+        url="https://example.test/asset.tif",
+        storage=LocalStorageClient(),
+        path=output,
+    )
+
+    assert output.read_bytes() == content
+    assert result.size_bytes == len(content)
+    assert result.header.startswith(b"II*\x00")
+    assert len(result.checksum) == 64
