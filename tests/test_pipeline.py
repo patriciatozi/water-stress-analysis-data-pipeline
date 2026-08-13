@@ -54,7 +54,7 @@ def test_nasa_only_requires_existing_boundary(settings: Settings) -> None:
 def test_dry_run_plans_all_sources_without_http(settings: Settings) -> None:
     results = run(settings, dry_run=True, http=PipelineHttpClient([]))
 
-    assert len(results) == 15
+    assert len(results) == 16
     assert all(result.state is IngestionState.PLANNED for result in results)
     assert not settings.storage.root_path.exists()
 
@@ -70,3 +70,15 @@ def test_cli_parser_defaults_and_options() -> None:
     assert selected.force is True
     assert selected.dry_run is True
     assert selected.config == Path("custom.yml")
+
+
+def test_mapbiomas_does_not_require_existing_boundary(settings: Settings) -> None:
+    tiff = b"II*\x00mapbiomas"
+
+    results = run(
+        settings,
+        source="mapbiomas",
+        http=PipelineHttpClient([tiff]),
+    )
+
+    assert [result.source for result in results] == ["mapbiomas"]

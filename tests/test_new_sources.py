@@ -9,7 +9,7 @@ import pytest
 
 from water_stress.config import Settings
 from water_stress.http import HttpDownload, HttpResponse
-from water_stress.ingestion import sentinel_2, soilgrids
+from water_stress.ingestion import mapbiomas, sentinel_2, soilgrids
 from water_stress.models import IngestionState
 from water_stress.storage import LocalStorageClient, StorageClient
 
@@ -75,6 +75,40 @@ def test_soilgrids_builds_requests_and_downloads_twelve_files(
 def test_soilgrids_rejects_invalid_tiff() -> None:
     with pytest.raises(ValueError, match="not a valid TIFF"):
         soilgrids.validate_tiff(b"invalid")
+
+
+def test_mapbiomas_builds_official_url_and_downloads_classification(
+    settings: Settings,
+) -> None:
+    http = SourceHttpClient([TIFF])
+
+    result = mapbiomas.ingest(settings, http=http, storage=LocalStorageClient())
+
+    assert mapbiomas.build_url(settings) == (
+        "https://storage.googleapis.com/mapbiomas-public/initiatives/brasil/"
+        "collection_10/lulc/coverage/brazil_coverage_2023.tif"
+    )
+    assert result.artifact_path == (
+        settings.storage.root_path
+        / "mapbiomas/land_cover/collection=10/year=2023/brazil_coverage_2023.tif"
+    )
+    assert result.artifact_path.read_bytes() == TIFF
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["target_class_code"] == 39
+    assert manifest["dataset"] == "annual_land_cover_classification"
+
+
+def test_mapbiomas_rejects_invalid_tiff_and_removes_artifact(settings: Settings) -> None:
+    storage = LocalStorageClient()
+
+    with pytest.raises(ValueError, match="not a valid TIFF"):
+        mapbiomas.ingest(
+            settings,
+            http=SourceHttpClient([b"invalid"]),
+            storage=storage,
+        )
+
+    assert not storage.exists(mapbiomas.artifact_path(settings))
 
 
 def test_date_windows_cover_period_without_gaps() -> None:

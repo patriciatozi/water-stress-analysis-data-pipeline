@@ -92,6 +92,14 @@ class Sentinel2Settings(BaseModel):
         return value
 
 
+class MapBiomasSettings(BaseModel):
+    base_url: HttpUrl
+    collection: int = Field(ge=1)
+    reference_year: int = Field(ge=1985, le=2100)
+    soybean_class: int = Field(ge=1)
+    license: str = Field(min_length=1)
+
+
 class HttpSettings(BaseModel):
     timeout_seconds: float = Field(gt=0)
     max_attempts: int = Field(ge=1)
@@ -116,6 +124,7 @@ class Settings(BaseSettings):
     nasa_power: NasaPowerSettings
     soilgrids: SoilGridsSettings
     sentinel_2: Sentinel2Settings
+    mapbiomas: MapBiomasSettings
     http: HttpSettings
     storage: StorageSettings
     config_hash: str = Field(exclude=True)

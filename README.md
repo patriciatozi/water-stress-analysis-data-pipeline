@@ -26,10 +26,11 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Meteorologia NASA POWER | Concluído e validado | JSON diário para um ponto representativo interno ao município |
 | SoilGrids | Concluído e validado | 12 recortes GeoTIFF via WCS |
 | Sentinel-2 L2A | Implementado | Catálogo STAC completo e download de quatro COGs para três cenas |
+| MapBiomas | Implementado | Classificação anual nacional da Coleção 10 para derivar máscara de soja (classe 39) |
 | Silver NASA POWER | Concluído e validado | Parquet diário particionado por ano, schema e relatório de qualidade |
 | Silver geoespacial | Não iniciada | Recortes, harmonização espacial, unidades e qualidade |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
-| MapBiomas e INMET | Fora do escopo atual | Fontes candidatas para fases posteriores |
+| INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
 O smoke test do SoilGrids produziu 12 rasters válidos. A consulta real ao catálogo Sentinel-2 encontrou 131 itens e selecionou três cenas representativas; os COGs não são versionados no Git.
 
@@ -63,6 +64,18 @@ A busca usa o catálogo STAC Earth Search, cobertura de nuvens de até 30% e o p
 
 Ativos baixados por cena: `red`, `nir`, `swir16` e `scl`. O download é feito em streaming, com checksum incremental, sem carregar o COG inteiro em memória.
 
+### MapBiomas
+
+A ingestão preserva o GeoTIFF nacional de cobertura e uso da terra da **Coleção 10**, ano de
+referência **2023**, disponibilizado no Google Cloud Storage oficial. A classe de soja é o código
+`39`, conforme a legenda oficial. O arquivo tem aproximadamente 762 MiB e é transferido em
+streaming.
+
+A Bronze mantém todas as classes originais. O recorte de Sorriso e a conversão para uma máscara
+binária (`1 = soja`, `0 = demais classes`) serão feitos na Silver geoespacial, pois são
+transformações derivadas. Os dados MapBiomas são disponibilizados sob licença CC BY 4.0 e devem
+ser citados conforme as orientações oficiais do projeto.
+
 ## Arquitetura atual
 
 ```text
@@ -78,6 +91,7 @@ src/water_stress/
 │   ├── ibge.py
 │   ├── nasa_power.py
 │   ├── soilgrids.py
+│   ├── mapbiomas.py
 │   └── sentinel_2.py
 └── pipelines/
     └── run_ingestion.py        # CLI e ordem de execução
@@ -126,6 +140,9 @@ data/bronze/
         ├── swir16.tif
         ├── scl.tif
         └── *.manifest.json
+└── mapbiomas/land_cover/collection=10/year=2023/
+    ├── brazil_coverage_2023.tif
+    └── brazil_coverage_2023.manifest.json
 ```
 
 Cada manifesto registra a origem, URL, parâmetros, instante UTC, status HTTP, tamanho, SHA-256, versão do projeto e hash da configuração. A execução padrão reutiliza somente arquivos cujo checksum e fingerprint da requisição continuam válidos. A opção `--force` cria uma versão imutável sem sobrescrever o artefato anterior.
@@ -191,7 +208,11 @@ uv run python -m water_stress.pipelines.run_ingestion --source ibge
 uv run python -m water_stress.pipelines.run_ingestion --source nasa-power
 uv run python -m water_stress.pipelines.run_ingestion --source soilgrids
 uv run python -m water_stress.pipelines.run_ingestion --source sentinel-2
+uv run python -m water_stress.pipelines.run_ingestion --source mapbiomas
 ```
+
+O download MapBiomas transfere aproximadamente 762 MiB para o ano configurado. A execução com
+`--source all` também inclui esse arquivo.
 
 As fontes NASA POWER, SoilGrids e Sentinel-2 dependem do limite IBGE existente. Ao executar `--source all`, essa ordem é resolvida automaticamente.
 
@@ -271,6 +292,8 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 - SoilGrids usa WCS porque a API REST beta está indisponível.
 - O recorte SoilGrids atual usa o bounding box municipal; a máscara pela geometria exata será aplicada depois.
 - Os COGs Sentinel-2 são preservados integralmente. Máscara SCL, escala/offset, reprojeção, NDVI e NDMI ainda não são calculados.
+- O raster MapBiomas Bronze cobre todo o Brasil e preserva todas as classes. O recorte municipal e
+  a máscara binária da classe 39 pertencem à futura Silver geoespacial.
 - A NASA POWER representa o município por um único ponto interno; a comparação com estações INMET poderá ser incorporada na validação futura.
 - O armazenamento atual é local, mas está isolado por `StorageClient` para futura implementação em S3 ou ADLS.
 - Arquivos em `data/` não devem ser enviados ao GitHub.
@@ -281,8 +304,9 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 2. Aplicar máscara SCL e calcular NDVI/NDMI para as cenas Sentinel-2.
 3. Criar uma grade comum e integrar clima, solo e índices espectrais.
 4. Implementar ETo, ETc, balanço hídrico, déficit e score de risco com premissas documentadas.
-5. Adicionar notebooks exploratórios e validação com fontes observacionais.
-6. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
+5. Gerar a máscara Silver de soja a partir da classe 39 do MapBiomas.
+6. Adicionar validação com fontes observacionais.
+7. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
 
 ## Como colaborar
 

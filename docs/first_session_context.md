@@ -52,6 +52,12 @@ Fontes implementadas:
    - Ativos: `red`, `nir`, `swir16` e `scl`.
    - Downloads em streaming com checksum incremental.
 
+5. **MapBiomas**
+   - Classificação nacional de cobertura e uso da terra da Coleção 10, ano 2023.
+   - GeoTIFF oficial preservado integralmente na Bronze.
+   - Classe-alvo de soja: código `39`.
+   - O recorte municipal e a máscara binária serão derivados na Silver geoespacial.
+
 A execução é idempotente. Arquivos íntegros da mesma requisição são reutilizados; `--force` cria
 uma versão nova sem sobrescrever o Bronze anterior.
 
@@ -133,6 +139,7 @@ uv run python -m water_stress.pipelines.run_ingestion --source ibge
 uv run python -m water_stress.pipelines.run_ingestion --source nasa-power
 uv run python -m water_stress.pipelines.run_ingestion --source soilgrids
 uv run python -m water_stress.pipelines.run_ingestion --source sentinel-2
+uv run python -m water_stress.pipelines.run_ingestion --source mapbiomas
 ```
 
 Transformar NASA POWER de Bronze para Silver:
@@ -184,7 +191,7 @@ uv run mypy src tests
 - COGs Sentinel-2 são preservados integralmente na Bronze.
 - Máscara SCL, escala/offset, recorte, reprojeção e índices espectrais persistidos ainda não fazem
   parte da Silver.
-- MapBiomas e INMET estão fora do escopo atual.
+- INMET está fora do escopo atual.
 - Dados e segredos não devem ser enviados ao GitHub.
 
 ## Próximas etapas recomendadas
@@ -221,7 +228,7 @@ docs/first_session_context.md anexado como memória do projeto e considere o REA
 documentação complementar.
 
 O MVP estuda estresse hídrico da soja em Sorriso-MT, de 01/09/2023 a 30/04/2024. A ingestão Bronze
-de IBGE, NASA POWER, SoilGrids e Sentinel-2 L2A está implementada. A Silver NASA POWER também está
+de IBGE, NASA POWER, SoilGrids, Sentinel-2 L2A e MapBiomas está implementada. A Silver NASA POWER também está
 pronta. A próxima decisão recomendada é implementar a Silver geoespacial, começando pelo
 Sentinel-2, preservando as resoluções nativas na Bronze e harmonizando as bandas formalmente na
 Silver.

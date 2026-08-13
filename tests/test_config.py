@@ -14,6 +14,7 @@ def test_load_default_settings() -> None:
 
     assert settings.study.municipality_code == "5107925"
     assert settings.study.start_date.isoformat() == "2023-09-01"
+    assert settings.mapbiomas.soybean_class == 39
     assert len(settings.config_hash) == 64
 
 
@@ -42,4 +43,14 @@ def test_rejects_non_mapping_yaml(tmp_path: Path) -> None:
     path.write_text("- item\n")
 
     with pytest.raises(ValueError, match="must be a YAML mapping"):
+        load_settings(path)
+
+
+def test_rejects_invalid_mapbiomas_class(tmp_path: Path) -> None:
+    raw = yaml.safe_load(Path("configs/project.yml").read_text())
+    raw["mapbiomas"]["soybean_class"] = 0
+    path = tmp_path / "invalid.yml"
+    path.write_text(yaml.safe_dump(raw))
+
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
         load_settings(path)

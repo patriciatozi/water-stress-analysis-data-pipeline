@@ -56,6 +56,13 @@ sentinel_2:
     - swir16
     - scl
 
+mapbiomas:
+  base_url: https://storage.googleapis.com/mapbiomas-public/initiatives/brasil
+  collection: 10
+  reference_year: 2023
+  soybean_class: 39
+  license: CC-BY-4.0
+
 http:
   timeout_seconds: 120
   max_attempts: 3

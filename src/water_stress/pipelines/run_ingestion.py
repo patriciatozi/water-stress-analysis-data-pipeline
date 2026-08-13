@@ -8,7 +8,7 @@ from pathlib import Path
 
 from water_stress.config import Settings, load_settings
 from water_stress.http import HttpClient, HttpGetter
-from water_stress.ingestion import ibge, nasa_power, sentinel_2, soilgrids
+from water_stress.ingestion import ibge, mapbiomas, nasa_power, sentinel_2, soilgrids
 from water_stress.logging import configure_logging
 from water_stress.models import IngestionResult
 from water_stress.storage import LocalStorageClient
@@ -70,16 +70,22 @@ def run(
                         dry_run=True,
                     )
                 )
+            if source in {"all", "mapbiomas"}:
+                results.append(
+                    mapbiomas.ingest(
+                        settings, http=http_client, storage=storage, force=force, dry_run=True
+                    )
+                )
             return results
 
-        ibge_content: bytes
+        ibge_content: bytes | None = None
         if source in {"all", "ibge"}:
             ibge_result = ibge.ingest(
                 settings, http=http_client, storage=storage, force=force, dry_run=False
             )
             results.append(ibge_result)
             ibge_content = storage.read_bytes(ibge_result.artifact_path)
-        else:
+        elif source in {"nasa-power", "soilgrids", "sentinel-2"}:
             boundary_path = ibge.artifact_path(settings)
             if not storage.exists(boundary_path):
                 raise FileNotFoundError(
@@ -89,6 +95,7 @@ def run(
             ibge_content = storage.read_bytes(boundary_path)
 
         if source in {"all", "nasa-power"}:
+            assert ibge_content is not None
             latitude, longitude = ibge.representative_point(ibge_content)
             results.append(
                 nasa_power.ingest(
@@ -102,6 +109,7 @@ def run(
                 )
             )
         if source in {"all", "soilgrids"}:
+            assert ibge_content is not None
             results.extend(
                 soilgrids.ingest(
                     settings,
@@ -112,10 +120,20 @@ def run(
                 )
             )
         if source in {"all", "sentinel-2"}:
+            assert ibge_content is not None
             results.extend(
                 sentinel_2.ingest(
                     settings,
                     boundary=ibge_content,
+                    http=http_client,
+                    storage=storage,
+                    force=force,
+                )
+            )
+        if source in {"all", "mapbiomas"}:
+            results.append(
+                mapbiomas.ingest(
+                    settings,
                     http=http_client,
                     storage=storage,
                     force=force,
@@ -133,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("configs/project.yml"))
     parser.add_argument(
         "--source",
-        choices=("all", "ibge", "nasa-power", "soilgrids", "sentinel-2"),
+        choices=("all", "ibge", "nasa-power", "soilgrids", "sentinel-2", "mapbiomas"),
         default="all",
     )
     parser.add_argument("--force", action="store_true")
