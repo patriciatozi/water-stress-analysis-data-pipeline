@@ -24,6 +24,11 @@ dev = [
   "types-pyyaml>=6.0,<7",
   "types-shapely>=2.0,<3",
 ]
+notebook = [
+  "jupyterlab>=4.2,<5",
+  "matplotlib>=3.9,<4",
+  "pandas>=2.2,<3",
+]
 
 [build-system]
 requires = ["hatchling"]
