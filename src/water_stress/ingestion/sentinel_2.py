@@ -150,7 +150,7 @@ def catalog_path(settings: Settings) -> Path:
         settings.storage.root_path
         / "sentinel_2"
         / "l2a"
-        / f"municipality_code={settings.study.municipality_code}"
+        / settings.study.partition_key
         / f"start_date={settings.study.start_date.isoformat()}"
         / f"end_date={settings.study.end_date.isoformat()}"
         / "search-results.json"
@@ -162,7 +162,7 @@ def asset_path(settings: Settings, item_id: str, asset: str) -> Path:
         settings.storage.root_path
         / "sentinel_2"
         / "l2a"
-        / f"municipality_code={settings.study.municipality_code}"
+        / settings.study.partition_key
         / f"item_id={item_id}"
         / f"{asset}.tif"
     )
@@ -211,13 +211,18 @@ def ingest(
                 "parameters": original_body,
                 "item_count": len(items),
                 "http_status": 200,
-                "municipality_code": settings.study.municipality_code,
+                "area_type": settings.study.area_type,
+                "area_code": settings.study.area_code,
+                "area_name": settings.study.area_name,
+                "crs": settings.spatial.query_crs,
                 "project_version": settings.project.version,
                 "config_sha256": settings.config_hash,
                 "request_fingerprint": search_fingerprint,
             },
         )
     results = [catalog_result]
+    if not settings.sentinel_2.download_bronze_assets:
+        return results
     for window, item in select_representative_items(settings, boundary=boundary, items=items):
         for asset_name in settings.sentinel_2.assets:
             asset = item.get("assets", {}).get(asset_name)
@@ -266,7 +271,11 @@ def ingest(
                         "cloud_cover": item["properties"].get("eo:cloud_cover"),
                         "http_status": response.status_code,
                         "content_type": response.content_type,
-                        "municipality_code": settings.study.municipality_code,
+                        "area_type": settings.study.area_type,
+                        "area_code": settings.study.area_code,
+                        "area_name": settings.study.area_name,
+                        "tile_id": item.get("properties", {}).get("s2:mgrs_tile"),
+                        "native_resolution_preserved": True,
                         "project_version": settings.project.version,
                         "config_sha256": settings.config_hash,
                         "request_fingerprint": request_fingerprint,

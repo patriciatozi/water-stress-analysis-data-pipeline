@@ -6,15 +6,20 @@ Pipeline acadêmico e reprodutível para integrar dados meteorológicos, de solo
 
 ## Visão do projeto
 
-O objetivo de longo prazo é produzir uma base espaço-temporal capaz de apoiar estudos de déficit hídrico e irrigação na agricultura de precisão. O projeto começa com uma área piloto em **Sorriso–MT** e evoluirá incrementalmente da ingestão de dados brutos até produtos analíticos.
+O objetivo de longo prazo é produzir uma base espaço-temporal capaz de apoiar estudos de déficit
+hídrico e irrigação na agricultura de precisão. O projeto usa **Mato Grosso inteiro** como área de
+estudo e evita materializar combinações diárias em alta resolução para todo o estado.
 
 Recorte atual:
 
-- município: Sorriso–MT;
-- código IBGE: `5107925`;
+- área: estado de Mato Grosso;
+- código IBGE da UF: `51`;
 - período: `2023-09-01` a `2024-04-30`;
 - cultura de interesse: soja;
-- estágio atual: ingestão da camada Bronze.
+- grade analítica: 1 km;
+- grade de detalhamento futuro: 250 m;
+- janela inicial do indicador: 7 dias;
+- estágio atual: fundações Bronze/Silver para processamento estadual.
 
 As saídas deste repositório são estimativas acadêmicas. Elas não constituem prescrição agronômica ou operacional de irrigação.
 
@@ -22,27 +27,60 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 
 | Componente | Estado | Implementação |
 |---|---|---|
-| Limite municipal IBGE | Concluído e validado | GeoJSON original de Sorriso–MT |
-| Meteorologia NASA POWER | Concluído e validado | JSON diário para um ponto representativo interno ao município |
-| SoilGrids | Concluído e validado | 12 recortes GeoTIFF via WCS |
-| Sentinel-2 L2A | Implementado | Catálogo STAC completo e download de quatro COGs para três cenas |
+| Limite estadual IBGE | Implementado e testado | GeoJSON original de Mato Grosso |
+| Meteorologia NASA POWER estadual | Implementado com mocks | Uma requisição regional por parâmetro |
+| SoilGrids estadual | Implementado com mocks | WCS dividido em chunks de 250 km |
+| Sentinel-2 L2A estadual | Implementado com mocks | Catálogo STAC; COGs desativados por padrão |
 | MapBiomas | Implementado | Classificação anual nacional da Coleção 10 para derivar máscara de soja (classe 39) |
-| Silver NASA POWER | Concluído e validado | Parquet diário particionado por ano, schema e relatório de qualidade |
-| Silver geoespacial | Não iniciada | Recortes, harmonização espacial, unidades e qualidade |
+| Silver NASA POWER pontual | Legado validado | Transformação do piloto municipal anterior |
+| Grade Silver estadual | Implementada e testada | GeoParquet de 1 km em SIRGAS 2000 / Brazil Polyconic |
+| Silver geoespacial temática | Não iniciada | Máscara soja, solo e índices por `grid_id` |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
-O smoke test do SoilGrids produziu 12 rasters válidos. A consulta real ao catálogo Sentinel-2 encontrou 131 itens e selecionou três cenas representativas; os COGs não são versionados no Git.
+Os smoke tests anteriores de Sorriso continuam como evidência dos clientes, mas seus artefatos
+locais não correspondem à nova AOI estadual. A ingestão deve ser executada novamente nos novos
+caminhos particionados.
+
+## Arquitetura estadual
+
+```text
+IBGE Mato Grosso --> dim_spatial_grid 1 km
+        |
+MapBiomas classe 39 --> crop_mask / soy_fraction (Silver futura)
+        |
+        +--> filtra tiles e células sem soja
+                    |
+       +------------+------------+
+       |            |            |
+  SoilGrids    NASA POWER    Sentinel-2
+   chunks       regional       catálogo/tiles
+   250 m         diário         10/20 m
+       |            |            |
+       +------------+------------+
+                    |
+           agregação semanal 1 km
+                    |
+                   Gold
+```
+
+As tabelas temáticas permanecem separadas (`dim_spatial_grid`, `crop_mask`, `soil_features`,
+`weather_daily` e `satellite_observation`). Somente a Gold materializará as features
+espaço-temporais necessárias ao score, sem repetir solo e geometria estáticos em cada data.
 
 ## Fontes ingeridas
 
 ### IBGE
 
-O limite municipal oficial é a dependência espacial das demais fontes. A geometria original é preservada em GeoJSON e usada em memória para calcular o ponto da NASA POWER, o bounding box do SoilGrids e a interseção com cenas Sentinel-2.
+O limite estadual oficial é a dependência espacial das demais fontes. A geometria original é
+preservada em GeoJSON e usada para o bounding box regional da NASA POWER, os chunks do SoilGrids,
+a grade de 1 km e a interseção com cenas Sentinel-2.
 
 ### NASA POWER
 
-Variáveis meteorológicas diárias:
+Variáveis meteorológicas diárias. A API regional recebe uma variável por requisição e limita cada
+bounding box a 10° por eixo. Mato Grosso é dividido em quatro regiões; os sete parâmetros geram 28
+artefatos independentes, que serão unidos e deduplicados na Silver por latitude, longitude e data:
 
 - `T2M`, `T2M_MAX`, `T2M_MIN`;
 - `RH2M`;
@@ -52,13 +90,21 @@ Variáveis meteorológicas diárias:
 
 ### SoilGrids
 
-Propriedades `clay`, `sand`, `soc` e `bdod`, nas profundidades `0-5cm`, `5-15cm` e `15-30cm`, usando a estimativa mediana `Q0.5`. Os recortes são solicitados ao WCS oficial no CRS Homolosine do SoilGrids e preservados como `GEOTIFF_INT16`.
+Propriedades `clay`, `sand`, `soc` e `bdod`, nas profundidades `0-5cm`, `5-15cm` e `15-30cm`,
+usando a estimativa mediana `Q0.5`. A extensão estadual projetada é dividida em chunks
+configuráveis de 250 km antes das solicitações WCS.
 
 ### Sentinel-2 L2A
 
-A busca usa o catálogo STAC Earth Search, cobertura de nuvens de até 30% e o período do estudo. O pipeline preserva o catálogo completo e divide o período em três janelas. Para cada janela, seleciona deterministicamente uma cena priorizando:
+A busca usa o catálogo STAC Earth Search, cobertura de nuvens de até 30% e o período do estudo. No
+modo estadual padrão, somente o catálogo é persistido. O download de COGs Bronze fica desativado
+para evitar materializar imagens de todo o estado; o processamento transitório por tile, filtrado
+pela máscara de soja, pertence à Silver.
 
-1. maior interseção com o município;
+O modo legado de cenas representativas pode ser habilitado com
+`sentinel_2.download_bronze_assets: true`. Nesse modo, a seleção prioriza:
+
+1. maior interseção com a AOI;
 2. menor cobertura de nuvens;
 3. data e identificador da cena como desempate.
 
@@ -71,7 +117,7 @@ referência **2023**, disponibilizado no Google Cloud Storage oficial. A classe 
 `39`, conforme a legenda oficial. O arquivo tem aproximadamente 762 MiB e é transferido em
 streaming.
 
-A Bronze mantém todas as classes originais. O recorte de Sorriso e a conversão para uma máscara
+A Bronze mantém todas as classes originais. O recorte de Mato Grosso e a conversão para uma máscara
 binária (`1 = soja`, `0 = demais classes`) serão feitos na Silver geoespacial, pois são
 transformações derivadas. Os dados MapBiomas são disponibilizados sob licença CC BY 4.0 e devem
 ser citados conforme as orientações oficiais do projeto.
@@ -93,8 +139,12 @@ src/water_stress/
 │   ├── soilgrids.py
 │   ├── mapbiomas.py
 │   └── sentinel_2.py
+├── transformation/
+│   ├── nasa_power.py          # transformação pontual legada
+│   └── spatial_grid.py        # grade estadual GeoParquet de 1 km
 └── pipelines/
-    └── run_ingestion.py        # CLI e ordem de execução
+    ├── run_ingestion.py
+    └── run_transformation.py
 tests/                          # testes unitários e de integração simulada
 data/bronze/                    # dados locais ignorados pelo Git
 data/silver/                    # dados padronizados locais ignorados pelo Git
@@ -105,10 +155,11 @@ Fluxo atual:
 ```text
 Configuração YAML
       ↓
-Limite municipal IBGE
-      ├──→ ponto representativo → NASA POWER
-      ├──→ bounding box projetado → SoilGrids WCS
-      └──→ geometria da busca → Sentinel-2 STAC → COGs selecionados
+Limite estadual IBGE
+      ├──→ bounding box → NASA POWER regional (1 parâmetro/requisição)
+      ├──→ bounding box projetado → chunks SoilGrids WCS
+      ├──→ geometria da busca → catálogo Sentinel-2 STAC
+      └──→ grade analítica Silver de 1 km
       ↓
 Arquivos originais + manifestos na camada Bronze
       ↓
@@ -119,27 +170,23 @@ Transformação NASA POWER → validações → Parquet Silver por ano
 
 ```text
 data/bronze/
-├── ibge/municipality/municipality_code=5107925/
-│   ├── municipality.geojson
-│   └── municipality.manifest.json
-├── nasa_power/daily/municipality_code=5107925/
+├── ibge/state/state_code=51/
+│   ├── state.geojson
+│   └── state.manifest.json
+├── nasa_power/daily_regional/state_code=51/
 │   └── start_date=2023-09-01/end_date=2024-04-30/
-│       ├── weather.json
-│       └── weather.manifest.json
-├── soilgrids/municipality_code=5107925/
-│   └── property={property}/depth={depth}/
+│       └── parameter={parameter}/
+│           └── region_id={region_id}/
+│               ├── weather.json
+│               └── weather.manifest.json
+├── soilgrids/state_code=51/
+│   └── property={property}/depth={depth}/chunk_id={chunk_id}/
 │       ├── {property}_{depth}_Q0.5.tif
 │       └── {property}_{depth}_Q0.5.manifest.json
-└── sentinel_2/l2a/municipality_code=5107925/
+├── sentinel_2/l2a/state_code=51/
     ├── start_date=2023-09-01/end_date=2024-04-30/
     │   ├── search-results.json
     │   └── search-results.manifest.json
-    └── item_id={item_id}/
-        ├── red.tif
-        ├── nir.tif
-        ├── swir16.tif
-        ├── scl.tif
-        └── *.manifest.json
 └── mapbiomas/land_cover/collection=10/year=2023/
     ├── brazil_coverage_2023.tif
     └── brazil_coverage_2023.manifest.json
@@ -147,7 +194,24 @@ data/bronze/
 
 Cada manifesto registra a origem, URL, parâmetros, instante UTC, status HTTP, tamanho, SHA-256, versão do projeto e hash da configuração. A execução padrão reutiliza somente arquivos cujo checksum e fingerprint da requisição continuam válidos. A opção `--force` cria uma versão imutável sem sobrescrever o artefato anterior.
 
-## Camada Silver NASA POWER
+## Camada Silver
+
+### Grade espacial estadual
+
+```text
+data/silver/dim_spatial_grid/state_code=51/resolution_meters=1000/
+├── grid.parquet
+└── _metadata.json
+```
+
+O GeoParquet possui `grid_id` estável, geometria WKB em `EPSG:5880`, centróide em longitude e
+latitude e área em km². O CRS projetado é obrigatório para que área e resolução sejam métricas.
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
+```
+
+### NASA POWER pontual legada
 
 A transformação meteorológica produz uma linha para cada data do período configurado, inclui latitude e longitude, converte o valor de preenchimento `-999` em `null` e usa nomes semânticos em `snake_case`:
 
@@ -167,7 +231,7 @@ A transformação meteorológica produz uma linha para cada data do período con
 As unidades e descrições são armazenadas nos metadados dos campos Parquet e também em `_schema.json`. O arquivo `_quality.json` registra quantidade de linhas, datas duplicadas e valores ausentes por coluna.
 
 ```text
-data/silver/nasa_power/daily/municipality_code=5107925/
+data/silver/nasa_power/daily/{area_type}_code={area_code}/
 ├── _schema.json
 ├── _quality.json
 ├── year=2023/part-000.parquet

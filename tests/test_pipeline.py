@@ -39,10 +39,10 @@ def test_full_pipeline_ingests_in_dependency_order(
     results = run(
         settings,
         source="nasa-power",
-        http=PipelineHttpClient([nasa_json]),
+        http=PipelineHttpClient([nasa_json] * 7),
     )
 
-    assert [result.source for result in results] == ["nasa_power"]
+    assert [result.source for result in results] == ["nasa_power"] * 7
     assert all(result.state is IngestionState.DOWNLOADED for result in results)
 
 
@@ -54,7 +54,7 @@ def test_nasa_only_requires_existing_boundary(settings: Settings) -> None:
 def test_dry_run_plans_all_sources_without_http(settings: Settings) -> None:
     results = run(settings, dry_run=True, http=PipelineHttpClient([]))
 
-    assert len(results) == 16
+    assert len(results) == 22
     assert all(result.state is IngestionState.PLANNED for result in results)
     assert not settings.storage.root_path.exists()
 

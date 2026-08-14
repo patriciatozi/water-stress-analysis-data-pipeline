@@ -6,19 +6,33 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from water_stress.config import load_settings
-from water_stress.transformation import nasa_power
+from water_stress.transformation import nasa_power, spatial_grid
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Transform Bronze data into Silver datasets")
     parser.add_argument("--config", type=Path, default=Path("configs/project.yml"))
-    parser.add_argument("--source", choices=("nasa-power",), default="nasa-power")
+    parser.add_argument("--source", choices=("nasa-power", "spatial-grid"), default="nasa-power")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
+    if args.source == "spatial-grid":
+        grid_result = spatial_grid.transform_boundary(settings)
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "dataset_path": str(grid_result.dataset_path),
+                    "geoparquet_path": str(grid_result.geoparquet_path),
+                    "metadata_path": str(grid_result.metadata_path),
+                    "row_count": grid_result.row_count,
+                }
+            )
+        )
+        return 0
     result = nasa_power.transform(settings)
     print(
         json.dumps(

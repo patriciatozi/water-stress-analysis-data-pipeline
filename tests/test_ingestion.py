@@ -37,7 +37,7 @@ class StubHttpClient:
 def test_builds_exact_ibge_request(settings: Settings) -> None:
     url, params, headers = ibge.build_request(settings)
 
-    assert url.endswith("/5107925")
+    assert url.endswith("/estados/51")
     assert params == {"formato": "application/vnd.geo+json", "qualidade": "minima"}
     assert headers == {"Accept": "application/vnd.geo+json"}
 
@@ -64,13 +64,42 @@ def test_calculates_internal_representative_point(polygon_geojson: bytes) -> Non
     assert (latitude, longitude) == (2.0, 2.0)
 
 
+def test_validates_nasa_power_regional_response() -> None:
+    content = json.dumps(
+        {
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [-56.25, -13.5]},
+                    "properties": {"parameter": {"T2M": {"20230901": 29.34}}},
+                }
+            ]
+        }
+    ).encode()
+
+    assert nasa_power.validate_response(content)["features"][0]["type"] == "Feature"
+
+
+def test_splits_mato_grosso_bbox_within_nasa_regional_limits() -> None:
+    regions = nasa_power.regional_bboxes((-61.6283, -18.0404, -50.2248, -7.3561), 10)
+
+    assert [region_id for region_id, _ in regions] == [
+        "r000_c000",
+        "r000_c001",
+        "r001_c000",
+        "r001_c001",
+    ]
+    assert all(max_lon - min_lon <= 10 for _, (min_lon, _, max_lon, _) in regions)
+    assert all(max_lat - min_lat <= 10 for _, (_, min_lat, _, max_lat) in regions)
+
+
 @pytest.mark.parametrize(
     ("validator", "content", "message"),
     [
         (ibge.validate_geojson, b"not-json", "not valid JSON"),
         (ibge.validate_geojson, b'{"type":"Unknown"}', "not a supported"),
         (nasa_power.validate_response, b"[]", "must be a JSON object"),
-        (nasa_power.validate_response, b'{"properties":{}}', "no daily parameter"),
+        (nasa_power.validate_response, b'{"properties":{}}', "no point or regional"),
     ],
 )
 def test_rejects_invalid_source_responses(validator: object, content: bytes, message: str) -> None:
@@ -92,7 +121,8 @@ def test_ibge_preserves_bytes_creates_manifest_and_reuses(
     assert first.artifact_path.read_bytes() == polygon_geojson
     manifest = json.loads(first.manifest_path.read_text())
     assert manifest["sha256"] == first.checksum
-    assert manifest["municipality_code"] == "5107925"
+    assert manifest["area_code"] == "51"
+    assert manifest["area_type"] == "state"
     assert manifest["size_bytes"] == len(polygon_geojson)
     assert len(http.calls) == 1
 

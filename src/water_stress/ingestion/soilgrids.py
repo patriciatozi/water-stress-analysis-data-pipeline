@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -60,14 +61,42 @@ def build_request(
     return url, params
 
 
-def artifact_path(settings: Settings, property_name: str, depth: str) -> Path:
+def chunk_bboxes(
+    bbox: tuple[float, float, float, float], chunk_size: int
+) -> list[tuple[str, tuple[float, float, float, float]]]:
+    min_x, min_y, max_x, max_y = bbox
+    columns = max(1, ceil((max_x - min_x) / chunk_size))
+    rows = max(1, ceil((max_y - min_y) / chunk_size))
+    chunks: list[tuple[str, tuple[float, float, float, float]]] = []
+    for row in range(rows):
+        for column in range(columns):
+            chunk_min_x = min_x + column * chunk_size
+            chunk_min_y = min_y + row * chunk_size
+            chunks.append(
+                (
+                    f"r{row:03d}_c{column:03d}",
+                    (
+                        chunk_min_x,
+                        chunk_min_y,
+                        min(chunk_min_x + chunk_size, max_x),
+                        min(chunk_min_y + chunk_size, max_y),
+                    ),
+                )
+            )
+    return chunks
+
+
+def artifact_path(
+    settings: Settings, property_name: str, depth: str, chunk_id: str = "r000_c000"
+) -> Path:
     filename = f"{property_name}_{depth}_{settings.soilgrids.quantile}.tif"
     return (
         settings.storage.root_path
         / "soilgrids"
-        / f"municipality_code={settings.study.municipality_code}"
+        / settings.study.partition_key
         / f"property={property_name}"
         / f"depth={depth}"
+        / f"chunk_id={chunk_id}"
         / filename
     )
 
@@ -93,58 +122,72 @@ def ingest(
     dry_run: bool = False,
 ) -> list[IngestionResult]:
     bbox = (0.0, 0.0, 0.0, 0.0) if dry_run else transformed_bbox(settings, boundary)
+    chunks = chunk_bboxes(bbox, settings.soilgrids.chunk_size_meters)
     results: list[IngestionResult] = []
-    for property_name in settings.soilgrids.properties:
-        for depth in settings.soilgrids.depths:
-            url, params = build_request(
-                settings, property_name=property_name, depth=depth, bbox=bbox
-            )
-            request_fingerprint = fingerprint({"url": url, "params": params})
-            path, manifest_path = versioned_paths(
-                artifact_path(settings, property_name, depth), force=force
-            )
-            if dry_run:
-                results.append(
-                    IngestionResult(SOURCE, path, manifest_path, None, None, IngestionState.PLANNED)
+    for chunk_id, chunk_bbox in chunks:
+        for property_name in settings.soilgrids.properties:
+            for depth in settings.soilgrids.depths:
+                url, params = build_request(
+                    settings, property_name=property_name, depth=depth, bbox=chunk_bbox
                 )
-                continue
-            if not force:
-                reused = reusable_result(
-                    source=SOURCE,
-                    storage=storage,
-                    artifact_path=path,
-                    manifest_path=manifest_path,
-                    request_fingerprint=request_fingerprint,
+                request_fingerprint = fingerprint({"url": url, "params": params})
+                path, manifest_path = versioned_paths(
+                    artifact_path(settings, property_name, depth, chunk_id), force=force
                 )
-                if reused:
-                    results.append(reused)
+                if dry_run:
+                    results.append(
+                        IngestionResult(
+                            SOURCE,
+                            path,
+                            manifest_path,
+                            None,
+                            None,
+                            IngestionState.PLANNED,
+                        )
+                    )
                     continue
-            response = http.get(source=SOURCE, url=url, params=params)
-            validate_tiff(response.content)
-            results.append(
-                persist_download(
-                    source=SOURCE,
-                    storage=storage,
-                    artifact_path=path,
-                    manifest_path=manifest_path,
-                    content=response.content,
-                    manifest={
-                        "source": SOURCE,
-                        "dataset": "soil_property",
-                        "property": property_name,
-                        "depth": depth,
-                        "quantile": settings.soilgrids.quantile,
-                        "url": url,
-                        "final_url": response.final_url,
-                        "parameters": params,
-                        "bbox": bbox,
-                        "http_status": response.status_code,
-                        "content_type": response.content_type,
-                        "municipality_code": settings.study.municipality_code,
-                        "project_version": settings.project.version,
-                        "config_sha256": settings.config_hash,
-                        "request_fingerprint": request_fingerprint,
-                    },
+                if not force:
+                    reused = reusable_result(
+                        source=SOURCE,
+                        storage=storage,
+                        artifact_path=path,
+                        manifest_path=manifest_path,
+                        request_fingerprint=request_fingerprint,
+                    )
+                    if reused:
+                        results.append(reused)
+                        continue
+                response = http.get(source=SOURCE, url=url, params=params)
+                validate_tiff(response.content)
+                results.append(
+                    persist_download(
+                        source=SOURCE,
+                        storage=storage,
+                        artifact_path=path,
+                        manifest_path=manifest_path,
+                        content=response.content,
+                        manifest={
+                            "source": SOURCE,
+                            "dataset": "soil_property_chunk",
+                            "property": property_name,
+                            "depth": depth,
+                            "quantile": settings.soilgrids.quantile,
+                            "chunk_id": chunk_id,
+                            "url": url,
+                            "final_url": response.final_url,
+                            "parameters": params,
+                            "bbox": chunk_bbox,
+                            "crs": settings.soilgrids.subset_crs,
+                            "resolution_meters": 250,
+                            "http_status": response.status_code,
+                            "content_type": response.content_type,
+                            "area_type": settings.study.area_type,
+                            "area_code": settings.study.area_code,
+                            "area_name": settings.study.area_name,
+                            "project_version": settings.project.version,
+                            "config_sha256": settings.config_hash,
+                            "request_fingerprint": request_fingerprint,
+                        },
+                    )
                 )
-            )
     return results

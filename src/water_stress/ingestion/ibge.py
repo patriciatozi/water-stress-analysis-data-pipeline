@@ -22,7 +22,8 @@ SOURCE = "ibge"
 
 
 def build_request(settings: Settings) -> tuple[str, dict[str, str], dict[str, str]]:
-    url = f"{str(settings.ibge.base_url).rstrip('/')}/{settings.study.municipality_code}"
+    resource = "estados" if settings.study.area_type == "state" else "municipios"
+    url = f"{str(settings.ibge.base_url).rstrip('/')}/{resource}/{settings.study.area_code}"
     params = {"formato": "application/vnd.geo+json", "qualidade": settings.ibge.quality}
     headers = {"Accept": "application/vnd.geo+json"}
     return url, params, headers
@@ -32,9 +33,9 @@ def artifact_path(settings: Settings) -> Path:
     return (
         settings.storage.root_path
         / "ibge"
-        / "municipality"
-        / f"municipality_code={settings.study.municipality_code}"
-        / "municipality.geojson"
+        / settings.study.area_type
+        / settings.study.partition_key
+        / f"{settings.study.area_type}.geojson"
     )
 
 
@@ -116,14 +117,16 @@ def ingest(
         content=response.content,
         manifest={
             "source": SOURCE,
-            "dataset": "municipal_boundary",
+            "dataset": f"{settings.study.area_type}_boundary",
             "url": url,
             "final_url": response.final_url,
             "parameters": params,
             "http_status": response.status_code,
             "content_type": response.content_type,
-            "municipality_code": settings.study.municipality_code,
-            "municipality_name": settings.study.municipality_name,
+            "area_type": settings.study.area_type,
+            "area_code": settings.study.area_code,
+            "area_name": settings.study.area_name,
+            "crs": "EPSG:4326",
             "study_start_date": settings.study.start_date.isoformat(),
             "study_end_date": settings.study.end_date.isoformat(),
             "project_version": settings.project.version,

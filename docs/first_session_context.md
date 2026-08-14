@@ -1,5 +1,9 @@
 # Memória de desenvolvimento — Water Stress Analysis Data Pipeline
 
+> Nota: este documento registra a primeira sessão e foi parcialmente superado pela decisão de
+> ampliar a AOI para Mato Grosso. Consulte `docs/data_architecture.md` e o README para o estado
+> arquitetural atual.
+
 > Documento portátil para retomar o projeto em outra sessão ou compartilhar o contexto com o
 > ChatGPT Web. Atualize-o quando houver mudanças relevantes de escopo, arquitetura ou estado.
 

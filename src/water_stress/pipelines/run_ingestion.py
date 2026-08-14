@@ -37,17 +37,29 @@ def run(
                     )
                 )
             if source in {"all", "nasa-power"}:
-                results.append(
-                    nasa_power.ingest(
-                        settings,
-                        latitude=0.0,
-                        longitude=0.0,
-                        http=http_client,
-                        storage=storage,
-                        force=force,
-                        dry_run=True,
+                if settings.study.area_type == "state":
+                    results.extend(
+                        nasa_power.ingest_region(
+                            settings,
+                            bbox=(0.0, 0.0, 0.0, 0.0),
+                            http=http_client,
+                            storage=storage,
+                            force=force,
+                            dry_run=True,
+                        )
                     )
-                )
+                else:
+                    results.append(
+                        nasa_power.ingest(
+                            settings,
+                            latitude=0.0,
+                            longitude=0.0,
+                            http=http_client,
+                            storage=storage,
+                            force=force,
+                            dry_run=True,
+                        )
+                    )
             if source in {"all", "soilgrids"}:
                 results.extend(
                     soilgrids.ingest(
@@ -96,18 +108,30 @@ def run(
 
         if source in {"all", "nasa-power"}:
             assert ibge_content is not None
-            latitude, longitude = ibge.representative_point(ibge_content)
-            results.append(
-                nasa_power.ingest(
-                    settings,
-                    latitude=latitude,
-                    longitude=longitude,
-                    http=http_client,
-                    storage=storage,
-                    force=force,
-                    dry_run=False,
+            if settings.study.area_type == "state":
+                bbox = ibge.geometry_from_geojson(ibge_content).bounds
+                results.extend(
+                    nasa_power.ingest_region(
+                        settings,
+                        bbox=bbox,
+                        http=http_client,
+                        storage=storage,
+                        force=force,
+                    )
                 )
-            )
+            else:
+                latitude, longitude = ibge.representative_point(ibge_content)
+                results.append(
+                    nasa_power.ingest(
+                        settings,
+                        latitude=latitude,
+                        longitude=longitude,
+                        http=http_client,
+                        storage=storage,
+                        force=force,
+                        dry_run=False,
+                    )
+                )
         if source in {"all", "soilgrids"}:
             assert ibge_content is not None
             results.extend(

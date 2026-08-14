@@ -12,7 +12,10 @@ from water_stress.config import load_settings
 def test_load_default_settings() -> None:
     settings = load_settings()
 
-    assert settings.study.municipality_code == "5107925"
+    assert settings.study.area_type == "state"
+    assert settings.study.area_code == "51"
+    assert settings.study.partition_key == "state_code=51"
+    assert settings.spatial.screening_grid_meters == 1000
     assert settings.study.start_date.isoformat() == "2023-09-01"
     assert settings.mapbiomas.soybean_class == 39
     assert len(settings.config_hash) == 64
@@ -21,8 +24,8 @@ def test_load_default_settings() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("municipality_code", "123", "exactly 7 digits"),
-        ("municipality_code", "abcdefg", "exactly 7 digits"),
+        ("area_code", "123", "exactly 2 digits"),
+        ("area_code", "ab", "only digits"),
         ("start_date", "2025-01-01", "start_date must be"),
     ],
 )

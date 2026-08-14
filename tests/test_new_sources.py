@@ -148,6 +148,11 @@ def test_selects_best_intersection_then_cloud_per_window(
 def test_sentinel_ingests_catalog_and_twelve_assets(
     settings: Settings, polygon_geojson: bytes
 ) -> None:
+    settings = settings.model_copy(
+        update={
+            "sentinel_2": settings.sentinel_2.model_copy(update={"download_bronze_assets": True})
+        }
+    )
     geometry = {
         "type": "Polygon",
         "coordinates": [[[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]]],
@@ -180,6 +185,11 @@ def test_sentinel_ingests_catalog_and_twelve_assets(
 def test_sentinel_fails_when_required_asset_is_missing(
     settings: Settings, polygon_geojson: bytes
 ) -> None:
+    settings = settings.model_copy(
+        update={
+            "sentinel_2": settings.sentinel_2.model_copy(update={"download_bronze_assets": True})
+        }
+    )
     geometry = {
         "type": "Polygon",
         "coordinates": [[[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]]],

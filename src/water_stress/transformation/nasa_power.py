@@ -144,12 +144,7 @@ def missing_counts(table: pa.Table) -> dict[str, int]:
 
 
 def dataset_path(settings: Settings) -> Path:
-    return (
-        settings.storage.silver_root_path
-        / "nasa_power"
-        / "daily"
-        / f"municipality_code={settings.study.municipality_code}"
-    )
+    return settings.storage.silver_root_path / "nasa_power" / "daily" / settings.study.partition_key
 
 
 def _schema_document(schema: pa.Schema) -> dict[str, Any]:
