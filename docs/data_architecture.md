@@ -105,14 +105,15 @@ Silver deverá:
 
 ### MapBiomas
 
-O raster original continua na Bronze. A máscara binária e `soy_fraction` ainda são pendências da
-Silver. Elas precisam ser concluídas antes do processamento estadual de Sentinel e devem ser
-usadas como filtro precoce.
+O raster original continua na Bronze. A tabela Silver `crop_mask` agrega a classe de soja por
+`grid_id` e ano, usando a fração de centros de pixels válidos dentro da geometria estadual. Valores
+categóricos não são interpolados. Esse método é documentado como
+`source_pixel_center_count`, produz `soy_fraction` adimensional entre 0 e 1 e fornece o filtro
+precoce necessário ao processamento Sentinel-2.
 
 ## Pendências deliberadas
 
 - transformação regional NASA POWER para `weather_daily`;
-- máscara MapBiomas e `soy_fraction` por grade;
 - processamento transitório Sentinel por tile;
 - agregação SoilGrids para `soil_features`;
 - grade adaptativa de 250 m em hotspots;

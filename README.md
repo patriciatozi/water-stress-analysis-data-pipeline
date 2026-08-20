@@ -34,7 +34,8 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | MapBiomas | Implementado | Classificação anual nacional da Coleção 10 para derivar máscara de soja (classe 39) |
 | Silver NASA POWER pontual | Legado validado | Transformação do piloto municipal anterior |
 | Grade Silver estadual | Implementada e testada | GeoParquet de 1 km em SIRGAS 2000 / Brazil Polyconic |
-| Silver geoespacial temática | Não iniciada | Máscara soja, solo e índices por `grid_id` |
+| Silver `crop_mask` | Implementada e testada | Fração de soja MapBiomas por `grid_id` |
+| Demais tabelas Silver temáticas | Não iniciadas | Clima regional, solo e índices por `grid_id` |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
@@ -236,6 +237,29 @@ data/silver/nasa_power/daily/{area_type}_code={area_code}/
 ├── _quality.json
 ├── year=2023/part-000.parquet
 └── year=2024/part-000.parquet
+```
+
+### Máscara temática de soja
+
+A transformação `crop-mask` cruza a classificação anual MapBiomas com a grade analítica e produz
+uma linha por `grid_id` e ano. `soy_fraction` é uma fração adimensional entre 0 e 1, calculada pela
+contagem dos centros dos pixels válidos da classe 39 que estão simultaneamente dentro do limite da
+AOI e da célula da grade. Como os dados são categóricos, nenhuma interpolação é aplicada. A
+aproximação por centro de pixel e a resolução da grade ficam registradas em `_metadata.json`.
+
+```text
+data/silver/crop_mask/state_code=51/year=2023/resolution_meters=1000/
+├── part-000.parquet
+├── _schema.json
+├── _quality.json
+└── _metadata.json
+```
+
+Pré-requisitos: limite IBGE, raster MapBiomas e `dim_spatial_grid` já materializados. Execute:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
+uv run python -m water_stress.pipelines.run_transformation --source crop-mask
 ```
 
 ## Preparação do ambiente
