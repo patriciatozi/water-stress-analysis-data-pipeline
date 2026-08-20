@@ -9,6 +9,7 @@ from water_stress.config import load_settings
 from water_stress.transformation import (
     crop_mask,
     nasa_power,
+    satellite_observation,
     soil_features,
     spatial_grid,
     weather_daily,
@@ -26,15 +27,40 @@ def build_parser() -> argparse.ArgumentParser:
             "crop-mask",
             "soil-features",
             "weather-daily",
+            "satellite-observation",
         ),
         default="nasa-power",
     )
+    parser.add_argument("--item-id", action="append", help="Sentinel-2 STAC item ID")
+    parser.add_argument("--max-items", type=int, default=1, help="Maximum Sentinel-2 items per run")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
+    if args.source == "satellite-observation":
+        satellite_results = satellite_observation.transform(
+            settings,
+            item_ids=set(args.item_id) if args.item_id else None,
+            max_items=args.max_items,
+        )
+        print(
+            json.dumps(
+                [
+                    {
+                        "source": args.source,
+                        "item_id": result.item_id,
+                        "parquet_path": str(result.parquet_path),
+                        "quality_path": str(result.quality_path),
+                        "row_count": result.row_count,
+                        "state": result.state,
+                    }
+                    for result in satellite_results
+                ]
+            )
+        )
+        return 0
     if args.source == "weather-daily":
         weather_result = weather_daily.transform(settings)
         print(

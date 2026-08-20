@@ -37,7 +37,7 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver `crop_mask` | Implementada e testada | Fração de soja MapBiomas por `grid_id` |
 | Silver `soil_features` | Implementada e testada | Solo SoilGrids de 0–30 cm por `grid_id` |
 | Silver `weather_daily` | Implementada e testada | Clima regional e ETo por célula e data |
-| Demais tabelas Silver temáticas | Não iniciadas | Índices de satélite por `grid_id` |
+| Silver `satellite_observation` | Implementada e testada localmente | NDVI/NDMI por cena e `grid_id` |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
@@ -326,6 +326,47 @@ data/silver/weather_daily/state_code=51/start_date=2023-09-01/end_date=2024-04-3
 ```bash
 uv run python -m water_stress.pipelines.run_transformation --source weather-daily
 ```
+
+### Observações Sentinel-2
+
+A transformação `satellite-observation` é incremental por cena. Primeiro cruza o footprint STAC
+com as células de 1 km que possuem soja; em seguida usa a classe 39 do MapBiomas no nível do pixel,
+aplica escala e offset L2A, máscara SCL e calcula NDVI e NDMI na grade B04/B08 de 10 m. B11 é
+reamostrada de 20 m por interpolação bilinear; SCL e MapBiomas usam vizinho mais próximo por serem
+categóricos. Os rasters intermediários não são persistidos.
+Somente reflectâncias finitas e estritamente positivas após escala e offset são consideradas
+válidas para os índices.
+
+Classes SCL válidas: 4, 5, 6 e 7. Classes 8, 9 e 10 compõem o percentual de nuvens. Percentis 10,
+50 e 90 são aproximados por histograma fixo de 400 classes entre -1 e 1, permitindo agregação em
+streaming com memória limitada.
+
+```text
+data/silver/satellite_observation/state_code=51/
+├── _schema.json
+├── _metadata.json
+└── year={year}/month={month}/tile_id={tile}/item_id={item_id}/
+    ├── part-000.parquet
+    └── _quality.json
+```
+
+Por segurança, o padrão processa apenas a próxima cena ainda não materializada:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
+```
+
+Processar um item específico ou um lote controlado:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --item-id S2B_21MVM_20230901_0_L2A
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --max-items 5
+```
+
+A leitura usa COGs remotos quando os ativos não existem localmente. Reexecuções de itens concluídos
+reutilizam o Parquet existente.
 
 ## Preparação do ambiente
 

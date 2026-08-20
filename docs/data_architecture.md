@@ -123,6 +123,14 @@ Silver deverá:
 6. agregar diretamente para `grid_id`;
 7. descartar intermediários de alta resolução.
 
+A tabela `satellite_observation` implementa esse fluxo incrementalmente por item STAC. A seleção
+inicial usa células com `soy_fraction > 0`; a máscara final usa diretamente a classe 39 MapBiomas
+reamostrada por vizinho mais próximo para 10 m. B11 usa bilinear de 20 m para 10 m, enquanto SCL
+usa vizinho mais próximo. Classes SCL 4–7 são válidas e 8–10 são nuvens. NDVI/NDMI são agregados
+por `grid_id` com média e percentis aproximados por histograma de 400 classes. Cada item constitui
+uma partição idempotente e nenhum raster intermediário é materializado.
+Reflectâncias não positivas depois da escala e offset L2A são excluídas dos dois índices.
+
 ### MapBiomas
 
 O raster original continua na Bronze. A tabela Silver `crop_mask` agrega a classe de soja por
@@ -133,7 +141,6 @@ precoce necessário ao processamento Sentinel-2.
 
 ## Pendências deliberadas
 
-- processamento transitório Sentinel por tile;
 - grade adaptativa de 250 m em hotspots;
 - tabelas Gold e score semanal.
 
