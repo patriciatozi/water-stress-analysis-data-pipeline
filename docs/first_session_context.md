@@ -1,242 +1,282 @@
 # Memória de desenvolvimento — Water Stress Analysis Data Pipeline
 
-> Nota: este documento registra a primeira sessão e foi parcialmente superado pela decisão de
-> ampliar a AOI para Mato Grosso. Consulte `docs/data_architecture.md` e o README para o estado
-> arquitetural atual.
-
 > Documento portátil para retomar o projeto em outra sessão ou compartilhar o contexto com o
 > ChatGPT Web. Atualize-o quando houver mudanças relevantes de escopo, arquitetura ou estado.
 
-## Objetivo
+## Estado atual
 
-Construir um pipeline acadêmico e reprodutível para integrar dados meteorológicos, de solo e de
-sensoriamento remoto usados na análise espaço-temporal do risco de estresse hídrico da soja.
+O projeto implementa um pipeline acadêmico e reprodutível para integrar meteorologia, solo, uso da
+terra e sensoriamento remoto na análise espaço-temporal do risco de estresse hídrico da soja.
 
-O MVP usa:
+Escopo vigente:
 
-- município: Sorriso–MT;
-- código IBGE: `5107925`;
+- área: estado de Mato Grosso (`state_code=51`);
 - período: `2023-09-01` a `2024-04-30`;
-- cultura de interesse: soja;
-- execução local com preparação para migração futura a S3 ou ADLS.
+- cultura: soja;
+- grade analítica principal: 1 km;
+- CRS métrico: SIRGAS 2000 / Brazil Polyconic (`EPSG:5880`);
+- consultas a APIs: `EPSG:4326`;
+- execução local preparada para futura migração a S3 ou ADLS.
 
-Os resultados são destinados a estudo acadêmico e não constituem prescrição agronômica ou de
-irrigação.
+O piloto municipal de Sorriso (`5107925`) foi a primeira versão e permanece apenas como contexto
+histórico. A configuração e a arquitetura atuais são estaduais. Os resultados são acadêmicos e não
+constituem prescrição agronômica, previsão operacional ou recomendação de irrigação.
 
-## Escopo implementado
+## Arquitetura
 
-### Camada Bronze
+- Bronze preserva respostas originais e imutáveis.
+- Silver contém dados padronizados, validados e agregados nas granularidades apropriadas.
+- Gold, ainda não implementada, integrará somente os atributos necessários em janelas temporais.
+- Dados baixados e produtos em `data/` não são versionados.
+- Cada dataset registra fonte, extração, CRS, resolução, unidades e versão de processamento.
 
-O pipeline preserva os arquivos recebidos das fontes e cria manifestos JSON contendo URL,
-parâmetros, instante UTC, status HTTP, tamanho, SHA-256, município, versão do projeto e hash da
-configuração.
+Tabelas atuais:
 
-Fontes implementadas:
+- `dim_spatial_grid`: dimensão espacial comum;
+- `crop_mask`: fração anual de soja;
+- `soil_features`: atributos estáticos de solo;
+- `weather_daily`: meteorologia diária por célula NASA POWER;
+- `satellite_observation`: índices espectrais por célula, cena e tile.
 
-1. **IBGE**
-   - GeoJSON oficial do limite municipal de Sorriso–MT.
-   - A geometria é usada para derivar o ponto da NASA POWER e as extensões espaciais das fontes
-     geográficas.
+Consulte `docs/data_architecture.md` para o modelo lógico detalhado.
 
-2. **NASA POWER**
-   - Série meteorológica diária consultada em um ponto representativo interno ao município.
-   - Variáveis: `T2M`, `T2M_MAX`, `T2M_MIN`, `RH2M`, `WS2M`,
-     `ALLSKY_SFC_SW_DWN` e `PRECTOTCORR`.
+## Camada Bronze
 
-3. **SoilGrids**
-   - Propriedades: argila (`clay`), areia (`sand`), carbono orgânico (`soc`) e densidade aparente
-     (`bdod`).
-   - Profundidades: `0-5cm`, `5-15cm` e `15-30cm`.
-   - Estimativa mediana `Q0.5` via WCS, totalizando 12 GeoTIFFs.
+### IBGE
 
-4. **Sentinel-2 L2A**
-   - Catálogo STAC Earth Search.
-   - Cobertura máxima de nuvens configurada em 30%.
-   - Seleção determinística de três cenas representativas em janelas temporais.
-   - Ativos: `red`, `nir`, `swir16` e `scl`.
-   - Downloads em streaming com checksum incremental.
+- GeoJSON oficial do limite de Mato Grosso.
+- A geometria dirige consultas, chunks, recortes, grade e seleção de cenas.
 
-5. **MapBiomas**
-   - Classificação nacional de cobertura e uso da terra da Coleção 10, ano 2023.
-   - GeoTIFF oficial preservado integralmente na Bronze.
-   - Classe-alvo de soja: código `39`.
-   - O recorte municipal e a máscara binária serão derivados na Silver geoespacial.
+### NASA POWER
 
-A execução é idempotente. Arquivos íntegros da mesma requisição são reutilizados; `--force` cria
-uma versão nova sem sobrescrever o Bronze anterior.
+- API regional diária.
+- Variáveis: `T2M`, `T2M_MAX`, `T2M_MIN`, `RH2M`, `WS2M`,
+  `ALLSKY_SFC_SW_DWN` e `PRECTOTCORR`.
+- Bounding box estadual dividido em quatro regiões.
+- Uma requisição por região e parâmetro: 28 artefatos.
+- Grades nativas: MERRA-2 (`0,5° × 0,625°`) e SYN1DEG (`1° × 1°`) para radiação.
 
-### Camada Silver
+### SoilGrids
 
-A transformação NASA POWER está concluída:
+- Propriedades: `clay`, `sand`, `soc` e `bdod`.
+- Profundidades: `0-5cm`, `5-15cm` e `15-30cm`.
+- Quantil `Q0.5`, via WCS em chunks de 250 km.
+- 360 GeoTIFFs: 4 propriedades × 3 profundidades × 30 chunks.
+- CRS configurado: `ESRI:54052`; resolução nominal: 250 m.
 
-- uma linha por data;
-- nomes de colunas em `snake_case`;
-- latitude e longitude;
-- unidades nos metadados do schema Parquet e em `_schema.json`;
-- conversão do valor de preenchimento `-999` para `null`;
-- validação de datas duplicadas;
-- relatório `_quality.json` com nulos e contagens;
-- Parquet compactado com Zstandard e particionado por ano.
+### Sentinel-2 L2A
 
-O smoke test real gerou 243 datas, duas partições anuais e nenhum valor nulo ou duplicado.
+- Catálogo Earth Search STAC com limite de nuvens de 30%.
+- Catálogo estadual validado: 3.128 itens, sem IDs duplicados.
+- B04 e B08: 10 m; B11 e SCL: 20 m.
+- O padrão estadual persiste somente o catálogo, sem baixar COGs em massa.
+- A Silver acessa COGs públicos remotamente ou reutiliza ativos locais.
 
-Silver geoespacial e camada Gold ainda não foram implementadas.
+### MapBiomas
 
-## Decisões sobre Sentinel-2
+- Coleção 10, ano 2023, GeoTIFF nacional original.
+- Classe de soja: `39`.
+- Licença: CC BY 4.0.
 
-As bandas possuem resoluções nativas diferentes:
+A ingestão é idempotente. Artefatos íntegros são reutilizados e `--force` cria uma versão imutável
+sem sobrescrever o arquivo anterior.
 
-- `red` e `nir`: 10 m;
-- `swir16` e `scl`: 20 m.
+## Camada Silver implementada
 
-Isso não é um erro da ingestão. A Bronze deve preservar as resoluções originais.
+### `dim_spatial_grid`
 
-No notebook exploratório, as bandas contínuas são alinhadas apenas em memória à grade de 20 m da
-SWIR16 com reamostragem bilinear. A leitura exploratória é limitada a 2048 pixels por eixo para
-controlar memória. Esse procedimento permite calcular NDVI e NDMI para diagnóstico, mas não gera
-um produto Silver.
+- 907.671 células de 1 km que intersectam Mato Grosso.
+- GeoParquet em `EPSG:5880`.
+- `grid_id` determinístico, geometria WKB, centróide e área em km².
 
-Recomendação para a futura Silver:
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
+```
 
-- manter `red` e `nir` em 10 m para o NDVI;
-- calcular NDMI em 20 m, reamostrando o NIR para a grade da SWIR16;
-- usar interpolação bilinear para reflectância;
-- usar vizinho mais próximo para `scl`, pois é categórica;
-- aplicar a máscara SCL antes dos índices;
-- recortar pelo limite municipal;
-- registrar CRS, resolução, transformação, método de reamostragem e bandas de origem;
-- não ampliar o NDMI para 10 m como se isso acrescentasse informação espacial.
+### `crop_mask`
 
-A camada Gold deverá consumir índices já harmonizados pela Silver, sem repetir a reamostragem.
+- Uma linha por `grid_id` e ano.
+- `soy_fraction` entre 0 e 1.
+- Classe 39 agregada pela contagem de centros de pixels válidos dentro da AOI.
+- Nenhuma interpolação categórica.
+- Smoke test: 907.671 linhas e 212.500 células com soja.
+- Área equivalente aproximada: 104.780 km².
 
-## Notebooks disponíveis
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source crop-mask
+```
+
+### `soil_features`
+
+| Coluna | Unidade | Origem e conversão |
+|---|---|---|
+| `clay_pct` | % | `clay` em g/kg × 0,1 |
+| `sand_pct` | % | `sand` em g/kg × 0,1 |
+| `soc` | g/kg | `soc` em dg/kg × 0,1 |
+| `bulk_density` | g/cm³ | `bdod` em cg/cm³ × 0,01 |
+
+- Média espacial dos centros de pixels por célula de 1 km.
+- Média vertical ponderada pelas espessuras 5, 10 e 15 cm para representar 0–30 cm.
+- Sem reamostragem ou interpolação.
+- Variações de até 1% na resolução de chunks parciais são validadas e registradas.
+- Valores brutos `<= 0` são ausentes, pois os TIFFs WCS observados não declaram `nodata`.
+- Smoke test: 907.671 linhas, 905.639 completas e nenhuma duplicidade.
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source soil-features
+```
+
+### `weather_daily`
+
+- Uma linha por `weather_cell_id` e data na grade MERRA-2.
+- Radiação SYN1DEG associada pelo centro mais próximo; distância máxima: `0,7071°`.
+- Valores `-999` convertidos em nulos.
+- ETo diária pela FAO-56 Penman–Monteith.
+- Pressão estimada pela elevação; vapor real pela temperatura e umidade relativa médias.
+- Fluxo de calor do solo diário igual a zero; `Rs/Rso` limitado de 0,3 a 1,0.
+- Parquet por ano.
+- Smoke test: 241 células × 243 datas = 58.563 linhas, sem nulos ou duplicidades.
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source weather-daily
+```
+
+### `satellite_observation`
+
+- Uma linha por `grid_id`, data, tile e item STAC.
+- Filtro inicial por `soy_fraction > 0` e máscara final MapBiomas classe 39 no pixel.
+- Escala `0,0001` e offset `-0,1` aplicados às reflectâncias L2A.
+- Reflectâncias precisam ser finitas e estritamente positivas.
+- B11 usa bilinear de 20 m para 10 m; SCL e MapBiomas usam vizinho mais próximo.
+- SCL válidas: 4, 5, 6 e 7; nuvens: 8, 9 e 10.
+- NDVI/NDMI com média, P10, P50 e P90.
+- Percentis aproximados por histograma de 400 classes entre -1 e 1.
+- Blocos de 512 × 512 pixels, sem raster intermediário persistido.
+- Partição incremental e idempotente por item.
+- O padrão processa a próxima cena pendente; `--max-items` controla o lote.
+
+Smoke tests reais:
+
+- `S2B_21LWG_20230911_0_L2A`: 129 células com soja;
+- `S2A_21LWG_20230926_0_L2A`: 38 células, NDVI médio de 0,287 a 0,873, sem
+  duplicidades ou nulos;
+- segunda execução do mesmo item retornou `reused`.
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --max-items 5
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --item-id S2A_21LWG_20230926_0_L2A
+```
+
+### NASA POWER pontual legado
+
+O transformador `--source nasa-power` do piloto municipal permanece para compatibilidade, mas a
+tabela estadual vigente é `weather_daily`.
+
+## Estrutura Silver
+
+```text
+data/silver/
+├── dim_spatial_grid/state_code=51/resolution_meters=1000/
+├── crop_mask/state_code=51/year=2023/resolution_meters=1000/
+├── soil_features/state_code=51/resolution_meters=1000/
+├── weather_daily/state_code=51/start_date=2023-09-01/end_date=2024-04-30/
+└── satellite_observation/state_code=51/year={year}/month={month}/
+    └── tile_id={tile}/item_id={item_id}/
+```
+
+Cada dataset possui schema e metadados. Relatórios de qualidade registram linhas, duplicidades,
+nulos, intervalos, métodos espaciais e proveniência conforme aplicável.
+
+## Notebooks
 
 | Arquivo | Conteúdo |
 |---|---|
-| `notebooks/01_explore_ibge_boundary.ipynb` | Geometria, extensão, ponto representativo e manifesto IBGE Bronze |
-| `notebooks/02_explore_nasa_power_bronze.ipynb` | Estrutura, unidades, qualidade e séries originais NASA POWER |
-| `notebooks/02_explore_nasa_power.ipynb` | Schema, qualidade, chuva, temperatura e períodos secos da Silver |
-| `notebooks/03_explore_soilgrids.ipynb` | Metadados, unidades, estatísticas e mapas dos rasters SoilGrids |
-| `notebooks/04_explore_sentinel_2.ipynb` | Catálogo, COGs, SCL e diagnóstico de NDVI/NDMI com alinhamento de grades |
+| `notebooks/01_explore_ibge_boundary.ipynb` | Limite, extensão e metadados IBGE |
+| `notebooks/02_explore_nasa_power_bronze.ipynb` | Estrutura e qualidade NASA POWER Bronze |
+| `notebooks/02_explore_nasa_power.ipynb` | Exploração do Silver meteorológico legado |
+| `notebooks/03_explore_soilgrids.ipynb` | Metadados, estatísticas e mapas SoilGrids |
+| `notebooks/04_explore_sentinel_2.ipynb` | Catálogo, bandas, SCL e NDVI/NDMI |
 
-Todos usam caminhos relativos. Os dados em `data/` são locais e não são versionados.
+Todos usam caminhos relativos. Os dados em `data/` permanecem locais.
 
-## Comandos principais
-
-Preparar o ambiente:
+## Comandos
 
 ```bash
 uv sync --all-groups
-```
-
-Planejar a ingestão sem download:
-
-```bash
 uv run python -m water_stress.pipelines.run_ingestion --dry-run
-```
-
-Executar todas as fontes ou uma fonte isolada:
-
-```bash
 uv run python -m water_stress.pipelines.run_ingestion
-uv run python -m water_stress.pipelines.run_ingestion --source ibge
-uv run python -m water_stress.pipelines.run_ingestion --source nasa-power
-uv run python -m water_stress.pipelines.run_ingestion --source soilgrids
-uv run python -m water_stress.pipelines.run_ingestion --source sentinel-2
-uv run python -m water_stress.pipelines.run_ingestion --source mapbiomas
-```
-
-Transformar NASA POWER de Bronze para Silver:
-
-```bash
-uv run python -m water_stress.pipelines.run_transformation --source nasa-power
-```
-
-Abrir os notebooks:
-
-```bash
-uv run --group notebook jupyter lab notebooks/
-```
-
-Validar o projeto:
-
-```bash
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src tests
+uv run mypy
+uv run --group notebook jupyter lab notebooks/
 ```
 
-## Qualidade confirmada na última validação
+Fontes individuais de ingestão: `ibge`, `nasa-power`, `soilgrids`, `sentinel-2` e `mapbiomas`.
 
-- 41 testes aprovados;
-- cobertura total de 85,22%;
-- Ruff aprovado;
-- verificação de formatação aprovada;
-- mypy em modo estrito aprovado;
-- notebooks executados sem erros;
-- nenhum caminho absoluto nos notebooks.
+## Qualidade confirmada
 
-## Estrutura técnica
+Após `satellite_observation`:
 
-- Python 3.12 e `uv`;
-- layout `src/`;
-- Pydantic Settings e YAML versionado;
-- cliente HTTP compartilhado com timeout, retry e backoff;
-- logging estruturado;
-- abstração `StorageClient`, com implementação local;
-- Ruff, mypy e pytest;
-- pandas, matplotlib, JupyterLab e rasterio no grupo opcional `notebook`.
+- 71 testes aprovados;
+- cobertura total de 85,78%;
+- Ruff e formatação aprovados;
+- mypy estrito aprovado;
+- smoke tests reais de todas as tabelas Silver estaduais;
+- nenhum dado Bronze, Silver ou COG versionado.
 
-## Limitações atuais
+## Limitações e decisões abertas
 
-- NASA POWER representa o município por um único ponto interno.
-- SoilGrids ainda cobre o bounding box municipal, sem máscara pela geometria exata.
-- COGs Sentinel-2 são preservados integralmente na Bronze.
-- Máscara SCL, escala/offset, recorte, reprojeção e índices espectrais persistidos ainda não fazem
-  parte da Silver.
-- INMET está fora do escopo atual.
-- Dados e segredos não devem ser enviados ao GitHub.
+- O catálogo Sentinel-2 possui 3.128 itens e deve continuar incremental e monitorado.
+- Podem existir múltiplos itens STAC para a mesma data e tile. A Gold deverá definir mosaico ou
+  prioridade antes de criar uma observação temporal única por célula.
+- Percentis Sentinel-2 são aproximações por histograma, com resolução de 0,005.
+- A ETo usa umidade relativa média porque RH mínima/máxima não são ingeridas.
+- INMET segue fora do escopo e poderá validar a meteorologia posteriormente.
+- A grade adaptativa de 250 m para hotspots ainda não foi implementada.
+- A camada Gold ainda não foi implementada.
 
 ## Próximas etapas recomendadas
 
-1. Implementar a Silver geoespacial do Sentinel-2, com máscara SCL, harmonização das grades,
-   recorte municipal e NDVI/NDMI.
-2. Implementar a Silver SoilGrids, com unidades físicas, máscara municipal e grade comum.
-3. Definir uma grade analítica que permita integrar clima, solo e sensoriamento remoto.
-4. Implementar ETo, ETc, balanço hídrico, déficit e score de risco com premissas documentadas.
-5. Adicionar testes espaciais para CRS, alinhamento, resolução, nodata e validade dos índices.
-6. Avaliar fonte observacional para validação meteorológica.
+1. Definir o contrato Gold e a janela temporal inicial de sete dias.
+2. Definir mosaico/prioridade para itens Sentinel-2 da mesma data e tile.
+3. Relacionar cada `grid_id` à célula `weather_cell_id` correspondente.
+4. Construir features semanais de clima, ETo, chuva, solo, soja, NDVI e NDMI.
+5. Definir balanço hídrico, déficit e score com premissas agronômicas documentadas.
+6. Criar testes espaço-temporais e notebooks de validação Gold.
+7. Avaliar INMET ou outra fonte observacional para validação meteorológica.
 
-## Histórico relevante de commits
+## Histórico de commits
 
 | Commit | Entrega |
 |---|---|
-| `bcc35ba` | Pipeline inicial de ingestão Bronze do MVP |
+| `bcc35ba` | Pipeline inicial de ingestão Bronze |
 | `d1a7fd9` | Ingestão SoilGrids e Sentinel-2 |
-| `ccd3b99` | README colaborativo expandido |
-| `63d1b76` | Transformação NASA POWER Bronze para Silver |
-| `7e84c32` | Notebook exploratório NASA POWER Silver |
-| `5fe24b4` | Notebooks exploratórios Bronze e alinhamento Sentinel-2 |
+| `63d1b76` | NASA POWER pontual Bronze para Silver |
+| `5fe24b4` | Notebooks Bronze e alinhamento Sentinel-2 |
+| `078b9e5` | Arquitetura estadual e ingestões escaláveis |
+| `acb7a6a` | Silver `crop_mask` |
+| `73bf0d2` | Silver `soil_features` |
+| `ddc5190` | Silver `weather_daily` e ETo |
+| `065af5d` | Silver `satellite_observation` |
 
-Branch atual no momento da criação desta memória: `main`, sincronizada com `origin/main` no commit
-`5fe24b4`.
+Estado desta atualização: `main` sincronizada com `origin/main` no commit `065af5d`.
 
 ## Prompt para continuar no ChatGPT Web
 
-Copie o texto abaixo e anexe este arquivo, se possível:
-
 ```text
 Estou desenvolvendo o repositório water-stress-analysis-data-pipeline. Use o arquivo
-docs/first_session_context.md anexado como memória do projeto e considere o README do repositório como
-documentação complementar.
+docs/first_session_context.md anexado como memória e considere também README.md e
+docs/data_architecture.md.
 
-O MVP estuda estresse hídrico da soja em Sorriso-MT, de 01/09/2023 a 30/04/2024. A ingestão Bronze
-de IBGE, NASA POWER, SoilGrids, Sentinel-2 L2A e MapBiomas está implementada. A Silver NASA POWER também está
-pronta. A próxima decisão recomendada é implementar a Silver geoespacial, começando pelo
-Sentinel-2, preservando as resoluções nativas na Bronze e harmonizando as bandas formalmente na
-Silver.
+O MVP atual cobre Mato Grosso (state_code=51) de 01/09/2023 a 30/04/2024. A Bronze de IBGE,
+NASA POWER regional, SoilGrids, Sentinel-2 L2A e MapBiomas está implementada. A Silver estadual
+possui dim_spatial_grid, crop_mask, soil_features, weather_daily e satellite_observation. A próxima
+etapa recomendada é definir a Gold semanal e a regra de mosaico/prioridade Sentinel-2.
 
-Antes de sugerir alterações, confirme o estado atual descrito na memória. Não presuma que dados
-locais estejam versionados. Não faça commit nem push sem minha autorização explícita.
+Antes de sugerir alterações, confirme o estado descrito nesta memória. Não presuma que dados locais
+estejam versionados. Não faça commit nem push sem minha autorização explícita.
 ```
