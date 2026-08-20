@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from water_stress.config import load_settings
-from water_stress.transformation import crop_mask, nasa_power, spatial_grid
+from water_stress.transformation import crop_mask, nasa_power, soil_features, spatial_grid
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("configs/project.yml"))
     parser.add_argument(
         "--source",
-        choices=("nasa-power", "spatial-grid", "crop-mask"),
+        choices=("nasa-power", "spatial-grid", "crop-mask", "soil-features"),
         default="nasa-power",
     )
     return parser
@@ -23,6 +23,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
+    if args.source == "soil-features":
+        soil_result = soil_features.transform(settings)
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "dataset_path": str(soil_result.dataset_path),
+                    "parquet_path": str(soil_result.parquet_path),
+                    "schema_path": str(soil_result.schema_path),
+                    "quality_path": str(soil_result.quality_path),
+                    "metadata_path": str(soil_result.metadata_path),
+                    "row_count": soil_result.row_count,
+                    "complete_row_count": soil_result.complete_row_count,
+                }
+            )
+        )
+        return 0
     if args.source == "crop-mask":
         crop_result = crop_mask.transform(settings)
         print(

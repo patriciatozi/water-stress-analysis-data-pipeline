@@ -35,7 +35,8 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver NASA POWER pontual | Legado validado | Transformação do piloto municipal anterior |
 | Grade Silver estadual | Implementada e testada | GeoParquet de 1 km em SIRGAS 2000 / Brazil Polyconic |
 | Silver `crop_mask` | Implementada e testada | Fração de soja MapBiomas por `grid_id` |
-| Demais tabelas Silver temáticas | Não iniciadas | Clima regional, solo e índices por `grid_id` |
+| Silver `soil_features` | Implementada e testada | Solo SoilGrids de 0–30 cm por `grid_id` |
+| Demais tabelas Silver temáticas | Não iniciadas | Clima regional e índices por `grid_id` |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
@@ -260,6 +261,41 @@ Pré-requisitos: limite IBGE, raster MapBiomas e `dim_spatial_grid` já material
 ```bash
 uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
 uv run python -m water_stress.pipelines.run_transformation --source crop-mask
+```
+
+### Atributos temáticos de solo
+
+A transformação `soil-features` agrega os chunks SoilGrids de 250 m para a grade analítica de
+1 km. Para cada profundidade, calcula a média dos pixels cujos centros estão dentro da geometria
+estadual e da célula; depois combina 0–5, 5–15 e 15–30 cm pela espessura de cada intervalo. Não há
+reamostragem ou interpolação dos rasters.
+Chunks parciais nas bordas podem apresentar resolução efetiva ligeiramente diferente dos 250 m
+nominais produzidos pelo WCS; o pipeline aceita variação máxima de 1%, registra o intervalo
+observado e continua usando os centros dos pixels originais.
+Como os GeoTIFFs WCS não declaram `nodata`, pixels mascarados e valores brutos menores ou iguais a
+zero são tratados como ausentes; zero está fora do domínio físico válido das quatro propriedades
+selecionadas. O relatório de qualidade registra nulos e intervalos finais por coluna.
+
+| Coluna | Unidade Silver | Unidade SoilGrids | Conversão |
+|---|---:|---:|---:|
+| `clay_pct` | % | g/kg | × 0,1 |
+| `sand_pct` | % | g/kg | × 0,1 |
+| `soc` | g/kg | dg/kg | × 0,1 |
+| `bulk_density` | g/cm³ | cg/cm³ | × 0,01 |
+
+```text
+data/silver/soil_features/state_code=51/resolution_meters=1000/
+├── part-000.parquet
+├── _schema.json
+├── _quality.json
+└── _metadata.json
+```
+
+Pré-requisitos: limite IBGE, chunks SoilGrids e `dim_spatial_grid` materializados. Execute:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
+uv run python -m water_stress.pipelines.run_transformation --source soil-features
 ```
 
 ## Preparação do ambiente

@@ -89,6 +89,17 @@ Silver regional deverá unir latitude, longitude e data, recortando células for
 A extensão projetada é dividida em blocos de 250 km com `chunk_id` determinístico. Cada propriedade
 e profundidade é independente, reduzindo o impacto de falhas e preparando paralelização futura.
 
+A tabela Silver `soil_features` atribui centros dos pixels nativos de 250 m às células da grade de
+1 km, sem interpolação, e calcula a média espacial de cada propriedade. As camadas 0–5, 5–15 e
+15–30 cm são combinadas por média ponderada pela espessura para representar 0–30 cm. Argila e areia
+são convertidas de g/kg para %, carbono orgânico de dg/kg para g/kg e densidade aparente de cg/cm³
+para g/cm³. Células sem cobertura completa nas três profundidades permanecem nulas.
+O WCS pode ajustar em menos de 1% a resolução de chunks parciais de borda; essa variação é validada
+e registrada, sem reamostragem, e resoluções fora dessa tolerância interrompem a transformação.
+Como o WCS não declara `nodata` nos GeoTIFFs observados, valores brutos menores ou iguais a zero
+são considerados preenchimento ausente para estas quatro propriedades, todas de domínio físico
+estritamente positivo.
+
 ### Sentinel-2 orientado a catálogo/tile
 
 O padrão estadual persiste apenas o catálogo STAC. O download Bronze dos COGs foi desativado por
@@ -115,7 +126,6 @@ precoce necessário ao processamento Sentinel-2.
 
 - transformação regional NASA POWER para `weather_daily`;
 - processamento transitório Sentinel por tile;
-- agregação SoilGrids para `soil_features`;
 - grade adaptativa de 250 m em hotspots;
 - tabelas Gold e score semanal.
 
