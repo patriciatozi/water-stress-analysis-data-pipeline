@@ -6,7 +6,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from water_stress.config import load_settings
-from water_stress.transformation import crop_mask, nasa_power, soil_features, spatial_grid
+from water_stress.transformation import (
+    crop_mask,
+    nasa_power,
+    soil_features,
+    spatial_grid,
+    weather_daily,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +20,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("configs/project.yml"))
     parser.add_argument(
         "--source",
-        choices=("nasa-power", "spatial-grid", "crop-mask", "soil-features"),
+        choices=(
+            "nasa-power",
+            "spatial-grid",
+            "crop-mask",
+            "soil-features",
+            "weather-daily",
+        ),
         default="nasa-power",
     )
     return parser
@@ -23,6 +35,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
+    if args.source == "weather-daily":
+        weather_result = weather_daily.transform(settings)
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "dataset_path": str(weather_result.dataset_path),
+                    "parquet_paths": [str(path) for path in weather_result.parquet_paths],
+                    "schema_path": str(weather_result.schema_path),
+                    "quality_path": str(weather_result.quality_path),
+                    "metadata_path": str(weather_result.metadata_path),
+                    "row_count": weather_result.row_count,
+                    "weather_cell_count": weather_result.weather_cell_count,
+                }
+            )
+        )
+        return 0
     if args.source == "soil-features":
         soil_result = soil_features.transform(settings)
         print(

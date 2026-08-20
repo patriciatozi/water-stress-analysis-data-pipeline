@@ -36,7 +36,8 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Grade Silver estadual | Implementada e testada | GeoParquet de 1 km em SIRGAS 2000 / Brazil Polyconic |
 | Silver `crop_mask` | Implementada e testada | Fração de soja MapBiomas por `grid_id` |
 | Silver `soil_features` | Implementada e testada | Solo SoilGrids de 0–30 cm por `grid_id` |
-| Demais tabelas Silver temáticas | Não iniciadas | Clima regional e índices por `grid_id` |
+| Silver `weather_daily` | Implementada e testada | Clima regional e ETo por célula e data |
+| Demais tabelas Silver temáticas | Não iniciadas | Índices de satélite por `grid_id` |
 | Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
@@ -296,6 +297,34 @@ Pré-requisitos: limite IBGE, chunks SoilGrids e `dim_spatial_grid` materializad
 ```bash
 uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
 uv run python -m water_stress.pipelines.run_transformation --source soil-features
+```
+
+### Meteorologia regional diária
+
+A transformação `weather-daily` une os 28 artefatos regionais NASA POWER, recorta os centros das
+células pela geometria de Mato Grosso e produz uma linha por `weather_cell_id` e data. Temperatura,
+umidade, vento e precipitação usam a grade MERRA-2 de `0,5° × 0,625°`. A radiação SYN1DEG de
+`1° × 1°` é atribuída pelo centro mais próximo, com distância máxima validada e registrada nos
+metadados. Esse é o único método de harmonização espacial aplicado.
+
+A evapotranspiração de referência diária (`reference_evapotranspiration_mm_day`) segue a equação
+FAO-56 Penman–Monteith para superfície de referência gramada. A pressão atmosférica é estimada pela
+elevação NASA POWER; a pressão real de vapor usa temperatura e umidade relativa médias. Se qualquer
+entrada necessária estiver ausente, a ETo permanece nula. Para o passo diário, o fluxo de calor no
+solo é zero e a razão entre radiação observada e céu claro é limitada ao intervalo FAO-56 de 0,3 a
+1,0; essas premissas também são persistidas nos metadados.
+
+```text
+data/silver/weather_daily/state_code=51/start_date=2023-09-01/end_date=2024-04-30/
+├── _schema.json
+├── _quality.json
+├── _metadata.json
+├── year=2023/part-000.parquet
+└── year=2024/part-000.parquet
+```
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source weather-daily
 ```
 
 ## Preparação do ambiente

@@ -84,6 +84,15 @@ Cada região e parâmetro gera uma requisição e um artefato Bronze, totalizand
 respeita as limitações da API regional e permite retry/idempotência por região e parâmetro. A
 Silver regional deverá unir latitude, longitude e data, recortando células fora da geometria da UF.
 
+A tabela Silver `weather_daily` usa a grade MERRA-2 de 0,5° latitude × 0,625° longitude como chave
+espacial, com `weather_cell_id` determinístico e uma linha por data. Como a radiação solar possui
+grade SYN1DEG de 1° × 1°, ela é harmonizada pelo centro vizinho mais próximo, limitado à distância
+angular máxima entre essas grades. A escolha e a distância máxima observada são persistidas nos
+metadados. A ETo diária é calculada pela FAO-56 Penman–Monteith usando elevação, temperaturas,
+umidade relativa média, vento e radiação; entradas incompletas produzem ETo nula.
+No balanço diário, o fluxo de calor do solo é assumido zero e `Rs/Rso` é limitado ao intervalo
+FAO-56 de 0,3 a 1,0; as premissas são registradas junto ao dataset.
+
 ### SoilGrids em chunks
 
 A extensão projetada é dividida em blocos de 250 km com `chunk_id` determinístico. Cada propriedade
@@ -124,7 +133,6 @@ precoce necessário ao processamento Sentinel-2.
 
 ## Pendências deliberadas
 
-- transformação regional NASA POWER para `weather_daily`;
 - processamento transitório Sentinel por tile;
 - grade adaptativa de 250 m em hotspots;
 - tabelas Gold e score semanal.
