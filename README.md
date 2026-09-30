@@ -47,6 +47,9 @@ caminhos particionados.
 
 ## Arquitetura estadual
 
+Consulte o [guia de implementação](docs/implementation_guide.md) para entender os artefatos de
+código, os fluxos de dados e as regras de negócio já implementadas.
+
 ```text
 IBGE Mato Grosso --> dim_spatial_grid 1 km
         |

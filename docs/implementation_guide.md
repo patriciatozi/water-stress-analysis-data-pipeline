@@ -1,0 +1,517 @@
+# Guia do código e das regras de negócio
+
+Este documento explica o que foi implementado, onde cada parte do código está e quais decisões de
+negócio são aplicadas aos dados.
+
+## 1. Objetivo e fluxo
+
+O pipeline prepara dados para analisar risco de estresse hídrico da soja em Mato Grosso entre
+`2023-09-01` e `2024-04-30`.
+
+```text
+IBGE + NASA POWER + SoilGrids + MapBiomas + Sentinel-2
+                         │
+                         ▼
+             Bronze: arquivos originais
+                         │
+                         ▼
+ Silver: grade + soja + solo + clima + índices de satélite
+                         │
+                         ▼
+               Gold: ainda não implementada
+```
+
+Hoje o código:
+
+1. baixa e preserva dados originais;
+2. cria uma grade estadual comum;
+3. identifica onde existe soja;
+4. agrega atributos de solo;
+5. organiza meteorologia diária e calcula ETo;
+6. calcula NDVI e NDMI nas áreas de soja.
+
+## 2. Regras das camadas
+
+### Bronze
+
+- guarda o arquivo recebido da fonte sem transformação;
+- nunca deve ser sobrescrita ou corrigida manualmente;
+- reutiliza arquivos íntegros da mesma requisição;
+- `--force` cria uma nova versão imutável;
+- cada arquivo possui manifesto JSON;
+- `data/` não é versionado no Git.
+
+### Silver
+
+- contém produtos derivados e prontos para análise;
+- usa colunas em `snake_case`;
+- documenta fonte, CRS, resolução, unidades e versão;
+- valida duplicidades e contabiliza nulos;
+- documenta agregação e reamostragem;
+- grava por arquivo temporário antes de substituir o destino.
+
+### Gold
+
+Ainda não existe. Deverá integrar a Silver em janelas semanais e produzir as variáveis do futuro
+score de risco.
+
+## 3. Configuração
+
+Arquivo: `configs/project.yml`.
+
+| Item | Valor atual | Uso |
+|---|---|---|
+| Área | Mato Grosso | Área de estudo |
+| Código | `51` | Particionamento estadual |
+| Período | 01/09/2023 a 30/04/2024 | Safra estudada |
+| CRS de consulta | `EPSG:4326` | APIs e geometrias web |
+| CRS métrico | `EPSG:5880` | Grade e áreas |
+| Grade principal | 1.000 m | Chave espacial comum |
+| Grade detalhada | 250 m | Uso futuro em hotspots |
+| Janela analítica | 7 dias | Planejada para Gold |
+| Classe de soja | `39` | MapBiomas |
+| Nuvem máxima | 30% | Busca Sentinel-2 |
+
+O arquivo `src/water_stress/config.py` carrega o YAML com Pydantic e valida:
+
+- código estadual com dois dígitos ou municipal com sete;
+- data inicial menor ou igual à final;
+- listas sem itens vazios ou repetidos;
+- resoluções positivas;
+- grade detalhada menor e divisora da grade principal.
+
+## 4. Mapa do código
+
+### Infraestrutura
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `config.py` | Configuração tipada |
+| `http.py` | HTTP, timeout, retry e backoff |
+| `storage.py` | Arquivos locais, checksum e escrita atômica |
+| `logging.py` | Logs estruturados JSON |
+| `models.py` | Resultados e estados das ingestões |
+
+### Bronze
+
+| Arquivo | Fonte |
+|---|---|
+| `ingestion/ibge.py` | Limite IBGE |
+| `ingestion/nasa_power.py` | NASA POWER pontual e regional |
+| `ingestion/soilgrids.py` | SoilGrids WCS |
+| `ingestion/sentinel_2.py` | Catálogo STAC e ativos Sentinel-2 |
+| `ingestion/mapbiomas.py` | GeoTIFF MapBiomas |
+| `ingestion/common.py` | Manifesto, fingerprint e idempotência |
+
+### Silver
+
+| Arquivo | Produto |
+|---|---|
+| `transformation/spatial_grid.py` | `dim_spatial_grid` |
+| `transformation/crop_mask.py` | `crop_mask` |
+| `transformation/soil_features.py` | `soil_features` |
+| `transformation/weather_daily.py` | `weather_daily` estadual |
+| `transformation/satellite_observation.py` | `satellite_observation` |
+| `transformation/nasa_power.py` | NASA POWER pontual legado |
+
+Pontos de entrada:
+
+- `pipelines/run_ingestion.py`: executa Bronze;
+- `pipelines/run_transformation.py`: executa Silver.
+
+## 5. Componentes compartilhados
+
+### HTTP
+
+`src/water_stress/http.py` aplica:
+
+- timeout de 120 segundos;
+- até três tentativas;
+- backoff de um segundo;
+- identificação da fonte nos erros;
+- streaming para downloads grandes;
+- SHA-256 calculado durante o download.
+
+### Armazenamento
+
+`StorageClient` é a interface preparada para uma futura implementação S3 ou ADLS.
+`LocalStorageClient` é a implementação atual.
+
+Arquivos são escritos primeiro em um temporário. O destino só é substituído após o término da
+escrita. Isso evita substituir um arquivo íntegro por um download interrompido.
+
+### Manifestos Bronze
+
+Registram, conforme a fonte:
+
+- URL, parâmetros e URL final;
+- instante UTC e status HTTP;
+- tamanho e SHA-256;
+- área, período, CRS e resolução;
+- versão e hash da configuração;
+- fingerprint da requisição.
+
+## 6. Ingestão por fonte
+
+### IBGE
+
+Código: `ingestion/ibge.py`.
+
+- baixa o GeoJSON oficial de Mato Grosso;
+- valida e combina geometrias quando necessário;
+- preserva `EPSG:4326` na Bronze;
+- fornece o limite exigido por NASA POWER, SoilGrids e Sentinel-2.
+
+```text
+data/bronze/ibge/state/state_code=51/state.geojson
+```
+
+### NASA POWER
+
+Código: `ingestion/nasa_power.py`.
+
+O bounding box estadual é dividido em quatro regiões. É feita uma requisição por região e
+parâmetro:
+
+```text
+4 regiões × 7 parâmetros = 28 artefatos
+```
+
+| Código | Variável | Unidade |
+|---|---|---|
+| `T2M` | Temperatura média | °C |
+| `T2M_MAX` | Temperatura máxima | °C |
+| `T2M_MIN` | Temperatura mínima | °C |
+| `RH2M` | Umidade relativa | % |
+| `WS2M` | Vento a 2 m | m/s |
+| `ALLSKY_SFC_SW_DWN` | Radiação solar | MJ/m²/dia |
+| `PRECTOTCORR` | Precipitação corrigida | mm/dia |
+
+Cada região e parâmetro é independente para permitir retry e reutilização.
+
+### SoilGrids
+
+Código: `ingestion/soilgrids.py`.
+
+O limite é projetado para `ESRI:54052` e dividido em chunks de 250 km.
+
+```text
+4 propriedades × 3 profundidades × 30 chunks = 360 GeoTIFFs
+```
+
+Propriedades: argila (`clay`), areia (`sand`), carbono orgânico (`soc`) e densidade aparente
+(`bdod`). Profundidades: 0–5, 5–15 e 15–30 cm. O quantil é a mediana `Q0.5`.
+
+A resposta precisa ter assinatura TIFF ou BigTIFF válida.
+
+### Sentinel-2
+
+Código: `ingestion/sentinel_2.py`.
+
+A busca STAC usa a coleção `sentinel-2-l2a`, período do estudo, geometria estadual, nuvens até 30%
+e páginas de 100 itens.
+
+O catálogo possui 3.128 itens. Por padrão, somente o catálogo é salvo. O download Bronze de COGs
+está desabilitado para evitar materializar milhares de cenas.
+
+Ativos necessários:
+
+- B04 `red`: 10 m;
+- B08 `nir`: 10 m;
+- B11 `swir16`: 20 m;
+- `scl`: 20 m.
+
+### MapBiomas
+
+Código: `ingestion/mapbiomas.py`.
+
+Baixa o GeoTIFF nacional da Coleção 10, ano 2023. Todas as classes são preservadas na Bronze. A
+classe 39, soja, é aplicada somente na Silver.
+
+## 7. Tabelas Silver
+
+### `dim_spatial_grid`
+
+Código: `transformation/spatial_grid.py`.
+
+Objetivo: criar a chave espacial comum.
+
+| Coluna | Significado |
+|---|---|
+| `grid_id` | Identificador determinístico |
+| `geometry` | Polígono WKB |
+| `centroid_latitude` | Latitude central |
+| `centroid_longitude` | Longitude central |
+| `area_km2` | Área da célula |
+
+Regras:
+
+- limite chega em `EPSG:4326`;
+- grade é calculada em `EPSG:5880`;
+- cada célula mede 1.000 × 1.000 m;
+- somente células que intersectam o estado são mantidas;
+- células de borda continuam quadradas, sem recorte;
+- `grid_id` deriva de estado, resolução, linha e coluna.
+
+Resultado: 907.671 células.
+
+### `crop_mask`
+
+Código: `transformation/crop_mask.py`.
+
+Objetivo: medir quanto de cada célula é soja.
+
+```text
+soy_fraction = pixels classe 39 / pixels MapBiomas válidos
+```
+
+Colunas: `grid_id`, `year` e `soy_fraction`.
+
+Somente centros de pixels dentro de Mato Grosso e da célula são contados. Não há interpolação,
+pois MapBiomas é categórico.
+
+Resultado:
+
+- 907.671 linhas;
+- 212.500 células com soja;
+- aproximadamente 104.780 km² equivalentes;
+- 71 células periféricas sem centro válido ficam nulas.
+
+### `soil_features`
+
+Código: `transformation/soil_features.py`.
+
+Objetivo: representar os primeiros 30 cm de solo em cada célula.
+
+| Coluna | Unidade | Conversão |
+|---|---|---|
+| `clay_pct` | % | g/kg × 0,1 |
+| `sand_pct` | % | g/kg × 0,1 |
+| `soc` | g/kg | dg/kg × 0,1 |
+| `bulk_density` | g/cm³ | cg/cm³ × 0,01 |
+
+Cálculo:
+
+1. média dos pixels de 250 m cujos centros caem na célula de 1 km;
+2. média das profundidades ponderada pelas espessuras 5, 10 e 15 cm.
+
+Regras:
+
+- sem interpolação;
+- exige as três profundidades para produzir uma propriedade;
+- valores brutos `<= 0` são ausentes porque os TIFFs observados não declaram `nodata`;
+- chunks de borda podem variar até 1% dos 250 m nominais;
+- variação maior interrompe o processamento;
+- rasters de um mesmo chunk precisam estar alinhados.
+
+Resultado: 907.671 linhas, 905.639 completas.
+
+### `weather_daily`
+
+Código: `transformation/weather_daily.py`.
+
+Objetivo: produzir meteorologia diária estadual.
+
+Chave: `weather_cell_id + date`.
+
+MERRA-2 usa grade `0,5° × 0,625°`; a radiação SYN1DEG usa `1° × 1°`.
+
+Harmonização:
+
+- MERRA-2 é a referência;
+- cada célula recebe a radiação do centro SYN1DEG mais próximo;
+- distância máxima observada: `0,7071°`.
+
+Valores `-999` viram nulos.
+
+#### ETo
+
+`reference_evapotranspiration_mm_day` usa FAO-56 Penman–Monteith.
+
+Premissas:
+
+- superfície gramada de referência;
+- pressão estimada pela elevação NASA POWER;
+- vapor real estimado por temperatura e umidade médias;
+- vento medido a 2 m;
+- fluxo diário de calor no solo igual a zero;
+- `Rs/Rso` limitado entre 0,3 e 1,0;
+- entrada ausente produz ETo nula.
+
+Resultado: 241 células × 243 datas = 58.563 linhas, particionadas em 2023 e 2024.
+
+### `satellite_observation`
+
+Código: `transformation/satellite_observation.py`.
+
+Objetivo: calcular índices somente nos pixels de soja e agregar por `grid_id`.
+
+Chave: `grid_id + date + tile_id + item_id`.
+
+Colunas:
+
+- média, P10, P50 e P90 de NDVI;
+- média, P10, P50 e P90 de NDMI;
+- pixels de soja e pixels válidos;
+- percentual válido e percentual de nuvens;
+- data, tile e item STAC.
+
+Fluxo:
+
+1. seleciona células com `soy_fraction > 0`;
+2. cruza centros das células com o footprint da cena;
+3. lê B04, B08, B11 e SCL localmente ou dos COGs públicos;
+4. projeta MapBiomas classe 39 para a grade Sentinel;
+5. processa blocos de 512 × 512 pixels;
+6. aplica soja, SCL, escala e offset;
+7. calcula NDVI e NDMI;
+8. agrega diretamente para `grid_id`;
+9. grava somente a tabela.
+
+Resolução e máscara:
+
+- B04 e B08 ficam em 10 m;
+- B11 passa de 20 m para 10 m com bilinear;
+- SCL e MapBiomas usam vizinho mais próximo;
+- escala `0,0001` e offset `-0,1` são aplicados antes dos índices;
+- reflectâncias precisam ser finitas e positivas;
+- SCL 4, 5, 6 e 7 são válidas;
+- SCL 8, 9 e 10 são nuvens;
+- demais classes são inválidas.
+
+```text
+NDVI = (NIR - RED) / (NIR + RED)
+NDMI = (NIR - SWIR16) / (NIR + SWIR16)
+```
+
+P10, P50 e P90 são aproximados por histograma de 400 classes entre -1 e 1. A precisão é cerca de
+0,005 e reduz o uso de memória.
+
+O padrão processa uma cena pendente. `--max-items` controla o lote e `--item-id` escolhe uma cena.
+Partições existentes e legíveis são reutilizadas. Nenhum raster intermediário é persistido.
+
+Podem existir vários itens na mesma data e tile. A regra de mosaico ou prioridade deve ser definida
+antes da Gold.
+
+## 8. Estrutura dos dados
+
+```text
+data/bronze/
+├── ibge/state/state_code=51/
+├── nasa_power/daily_regional/state_code=51/
+├── soilgrids/state_code=51/property={property}/depth={depth}/chunk_id={chunk}/
+├── sentinel_2/l2a/state_code=51/
+└── mapbiomas/land_cover/collection=10/year=2023/
+
+data/silver/
+├── dim_spatial_grid/state_code=51/resolution_meters=1000/
+├── crop_mask/state_code=51/year=2023/resolution_meters=1000/
+├── soil_features/state_code=51/resolution_meters=1000/
+├── weather_daily/state_code=51/start_date=2023-09-01/end_date=2024-04-30/
+└── satellite_observation/state_code=51/year={year}/month={month}/
+    └── tile_id={tile}/item_id={item_id}/
+```
+
+Arquivos auxiliares Silver:
+
+- `_schema.json`: colunas, tipos, descrições e unidades;
+- `_quality.json`: linhas, nulos, duplicidades e intervalos;
+- `_metadata.json`: fonte, CRS, resolução, método e versão.
+
+## 9. Ordem de execução
+
+```bash
+uv sync --all-groups
+
+uv run python -m water_stress.pipelines.run_ingestion --source ibge
+uv run python -m water_stress.pipelines.run_ingestion --source nasa-power
+uv run python -m water_stress.pipelines.run_ingestion --source soilgrids
+uv run python -m water_stress.pipelines.run_ingestion --source sentinel-2
+uv run python -m water_stress.pipelines.run_ingestion --source mapbiomas
+
+uv run python -m water_stress.pipelines.run_transformation --source spatial-grid
+uv run python -m water_stress.pipelines.run_transformation --source crop-mask
+uv run python -m water_stress.pipelines.run_transformation --source soil-features
+uv run python -m water_stress.pipelines.run_transformation --source weather-daily
+uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
+```
+
+Dependências:
+
+- NASA POWER, SoilGrids e Sentinel-2 precisam do limite IBGE;
+- `crop_mask` precisa da grade e MapBiomas;
+- `soil_features` precisa da grade e SoilGrids;
+- `weather_daily` precisa do limite e dos 28 artefatos NASA POWER;
+- `satellite_observation` precisa da grade, `crop_mask`, MapBiomas e catálogo Sentinel-2.
+
+## 10. Opções
+
+Ingestão:
+
+```text
+--source     fonte ou all
+--dry-run    planeja sem baixar ou gravar
+--force      cria nova versão imutável
+--config     seleciona outro YAML
+```
+
+Transformação:
+
+```text
+--source       produto Silver
+--config       seleciona outro YAML
+--item-id      item Sentinel-2; pode ser repetido
+--max-items    lote Sentinel-2; padrão 1
+```
+
+`--force` não existe nas transformações Silver.
+
+## 11. Testes
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+```
+
+Os testes cobrem configuração, HTTP, retry, erros, checksum, idempotência, geometrias, grade,
+conversões de solo, soja, meteorologia, ETo, SCL, escala, offset, NDVI, NDMI, partições e metadados.
+
+Última validação registrada: 71 testes, cobertura de 85,78%, Ruff e mypy aprovados.
+
+## 12. Notebooks
+
+| Notebook | Uso |
+|---|---|
+| `01_explore_ibge_boundary.ipynb` | Limite IBGE |
+| `02_explore_nasa_power_bronze.ipynb` | NASA POWER original |
+| `02_explore_nasa_power.ipynb` | Silver pontual legada |
+| `03_explore_soilgrids.ipynb` | Rasters de solo |
+| `04_explore_sentinel_2.ipynb` | Catálogo, bandas e índices |
+
+```bash
+uv run --group notebook jupyter lab notebooks/
+```
+
+## 13. Ainda não implementado
+
+- Gold e agregações semanais;
+- mosaico/prioridade para itens Sentinel da mesma data e tile;
+- associação persistida de `grid_id` com `weather_cell_id`;
+- balanço hídrico, déficit e score;
+- grade adaptativa de 250 m;
+- validação com INMET;
+- armazenamento S3 ou ADLS.
+
+## 14. Regras que não devem mudar silenciosamente
+
+- Bronze nunca deve ser transformada ou sobrescrita.
+- Áreas devem ser calculadas em CRS métrico, não em graus.
+- Rasters categóricos usam vizinho mais próximo.
+- Bilinear é usada somente para a reflectância contínua B11.
+- Toda reamostragem deve ser documentada.
+- SoilGrids `<= 0` é ausente enquanto a fonte não declarar `nodata`.
+- ETo depende das premissas FAO-56 registradas.
+- Sentinel-2 deve continuar incremental até existir estimativa de custo e tempo.
+- Dados locais nunca devem ser adicionados ao Git.
