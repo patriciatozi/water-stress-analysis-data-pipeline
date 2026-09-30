@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from pyproj import Transformer
 from shapely.geometry import box
 from shapely.ops import transform
 
 from water_stress.config import Settings
 from water_stress.ingestion import ibge
+from water_stress.transformation import common
 
 
 @dataclass(frozen=True)
@@ -110,30 +110,23 @@ def dataset_path(settings: Settings) -> Path:
 
 def write_grid(settings: Settings, table: pa.Table) -> SpatialGridResult:
     root = dataset_path(settings)
-    root.mkdir(parents=True, exist_ok=True)
     output = root / "grid.parquet"
-    temporary = output.with_suffix(".parquet.tmp")
-    pq.write_table(table, temporary, compression="zstd")
-    temporary.replace(output)
+    common.write_parquet(output, table)
     metadata_path = root / "_metadata.json"
-    metadata_path.write_text(
-        json.dumps(
-            {
-                "dataset": "dim_spatial_grid",
-                "area_type": settings.study.area_type,
-                "area_code": settings.study.area_code,
-                "area_name": settings.study.area_name,
-                "row_count": table.num_rows,
-                "query_crs": settings.spatial.query_crs,
-                "area_crs": settings.spatial.area_crs,
-                "resolution_meters": settings.spatial.screening_grid_meters,
-                "detail_resolution_meters": settings.spatial.detail_grid_meters,
-                "processing_version": settings.project.version,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
+    common.write_json(
+        metadata_path,
+        {
+            "dataset": "dim_spatial_grid",
+            "area_type": settings.study.area_type,
+            "area_code": settings.study.area_code,
+            "area_name": settings.study.area_name,
+            "row_count": table.num_rows,
+            "query_crs": settings.spatial.query_crs,
+            "area_crs": settings.spatial.area_crs,
+            "resolution_meters": settings.spatial.screening_grid_meters,
+            "detail_resolution_meters": settings.spatial.detail_grid_meters,
+            "processing_version": settings.project.version,
+        },
     )
     return SpatialGridResult(root, output, metadata_path, table.num_rows)
 

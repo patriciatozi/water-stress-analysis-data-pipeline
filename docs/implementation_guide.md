@@ -113,6 +113,7 @@ O arquivo `src/water_stress/config.py` carrega o YAML com Pydantic e valida:
 | `transformation/weather_daily.py` | `weather_daily` estadual |
 | `transformation/satellite_observation.py` | `satellite_observation` |
 | `transformation/nasa_power.py` | NASA POWER pontual legado |
+| `transformation/common.py` | Escrita atômica e metadados comuns da Silver |
 
 Pontos de entrada:
 
@@ -139,6 +140,23 @@ Pontos de entrada:
 
 Arquivos são escritos primeiro em um temporário. O destino só é substituído após o término da
 escrita. Isso evita substituir um arquivo íntegro por um download interrompido.
+
+O checksum local é calculado em blocos, sem carregar arquivos grandes inteiros na memória. O
+tamanho e o checksum são consultados pela interface de armazenamento, sem acoplar a ingestão ao
+filesystem local.
+
+### Escrita e qualidade Silver
+
+`transformation/common.py` centraliza somente operações compartilhadas pelas tabelas Silver:
+
+- escrita atômica de JSON e Parquet com compressão Zstandard;
+- documentação uniforme de schemas;
+- contagem de nulos e faixas de valores;
+- validação dos arquivos exigidos por uma transformação.
+
+As fórmulas e regras específicas continuam nos módulos temáticos. A orquestração Bronze aceita as
+interfaces HTTP e de armazenamento por injeção, facilitando testes e uma futura implementação em
+nuvem.
 
 ### Manifestos Bronze
 

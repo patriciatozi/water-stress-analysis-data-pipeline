@@ -27,7 +27,7 @@ from shapely.strtree import STRtree
 
 from water_stress.config import Settings
 from water_stress.ingestion import mapbiomas, sentinel_2
-from water_stress.transformation import crop_mask, spatial_grid
+from water_stress.transformation import common, crop_mask, spatial_grid
 
 VALID_SCL_CLASSES = frozenset({4, 5, 6, 7})
 CLOUD_SCL_CLASSES = frozenset({8, 9, 10})
@@ -407,12 +407,6 @@ def process_item(
     return _build_table(settings, item, item_grid_ids, accumulators)
 
 
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
 def write_item(
     settings: Settings,
     item: dict[str, Any],
@@ -421,10 +415,7 @@ def write_item(
     source_extraction_timestamp: str | None,
 ) -> SatelliteObservationResult:
     output = item_output_path(settings, item)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(".parquet.tmp")
-    pq.write_table(table, temporary, compression="zstd")
-    temporary.replace(output)
+    common.write_parquet(output, table)
     quality_path = output.with_name("_quality.json")
     range_columns = [
         "ndvi_mean",
@@ -432,18 +423,8 @@ def write_item(
         "valid_pixel_pct",
         "cloud_pixel_pct",
     ]
-    ranges = {
-        name: {
-            "minimum": min(
-                (value for value in table[name].to_pylist() if value is not None), default=None
-            ),
-            "maximum": max(
-                (value for value in table[name].to_pylist() if value is not None), default=None
-            ),
-        }
-        for name in range_columns
-    }
-    _write_json(
+    ranges = common.column_ranges(table, range_columns)
+    common.write_json(
         quality_path,
         {
             "dataset": "satellite_observation",
@@ -464,7 +445,7 @@ def write_item(
                     )
                 )
             ),
-            "missing_by_column": {name: table[name].null_count for name in table.column_names},
+            "missing_by_column": common.missing_counts(table),
             "range_by_column": ranges,
             "valid_scl_classes": sorted(VALID_SCL_CLASSES),
             "cloud_scl_classes": sorted(CLOUD_SCL_CLASSES),
@@ -473,7 +454,7 @@ def write_item(
         },
     )
     root = dataset_path(settings)
-    _write_json(
+    common.write_json(
         root / "_metadata.json",
         {
             "dataset": "satellite_observation",
@@ -489,20 +470,9 @@ def write_item(
             "processing_version": settings.project.version,
         },
     )
-    _write_json(
+    common.write_json(
         root / "_schema.json",
-        {
-            "dataset": "satellite_observation",
-            "columns": [
-                {
-                    "name": field.name,
-                    "type": str(field.type),
-                    "unit": (field.metadata or {}).get(b"unit", b"").decode(),
-                    "description": (field.metadata or {}).get(b"description", b"").decode(),
-                }
-                for field in table.schema
-            ],
-        },
+        common.schema_document("satellite_observation", table.schema),
     )
     LOGGER.info(
         "Silver satellite observation written",

@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from water_stress.config import Settings
 from water_stress.ingestion import nasa_power
+from water_stress.transformation import common
 
 SOURCE_TO_SILVER = {
     "T2M": ("temperature_mean_c", "C", "Mean air temperature at 2 meters"),
@@ -140,27 +140,11 @@ def transform_document(settings: Settings, document: dict[str, Any]) -> pa.Table
 
 
 def missing_counts(table: pa.Table) -> dict[str, int]:
-    return {name: table.column(name).null_count for name in table.column_names}
+    return common.missing_counts(table)
 
 
 def dataset_path(settings: Settings) -> Path:
     return settings.storage.silver_root_path / "nasa_power" / "daily" / settings.study.partition_key
-
-
-def _schema_document(schema: pa.Schema) -> dict[str, Any]:
-    return {
-        "dataset": "nasa_power_daily",
-        "columns": [
-            {
-                "name": field.name,
-                "type": str(field.type),
-                "nullable": field.nullable,
-                "unit": (field.metadata or {}).get(b"unit", b"").decode(),
-                "description": (field.metadata or {}).get(b"description", b"").decode(),
-            }
-            for field in schema
-        ],
-    }
 
 
 def write_partitioned(
@@ -181,33 +165,27 @@ def write_partitioned(
         indices = [index for index, value in enumerate(dates) if value.year == year]
         partition = table.take(pa.array(indices, type=pa.int64()))
         output = root / f"year={year}" / "part-000.parquet"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_suffix(".parquet.tmp")
-        pq.write_table(partition, temporary, compression="zstd")
-        temporary.replace(output)
+        common.write_parquet(output, partition)
         parquet_paths.append(output)
 
     schema_path = root / "_schema.json"
     quality_path = root / "_quality.json"
     counts = missing_counts(table)
-    schema_path.write_text(
-        json.dumps(_schema_document(table.schema), ensure_ascii=False, indent=2) + "\n"
+    common.write_json(
+        schema_path,
+        common.schema_document("nasa_power_daily", table.schema),
     )
-    quality_path.write_text(
-        json.dumps(
-            {
-                "dataset": "nasa_power_daily",
-                "source_path": str(source_path),
-                "row_count": table.num_rows,
-                "duplicate_date_count": 0,
-                "missing_by_column": counts,
-                "study_start_date": settings.study.start_date.isoformat(),
-                "study_end_date": settings.study.end_date.isoformat(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
+    common.write_json(
+        quality_path,
+        {
+            "dataset": "nasa_power_daily",
+            "source_path": str(source_path),
+            "row_count": table.num_rows,
+            "duplicate_date_count": 0,
+            "missing_by_column": counts,
+            "study_start_date": settings.study.start_date.isoformat(),
+            "study_end_date": settings.study.end_date.isoformat(),
+        },
     )
     return SilverResult(
         dataset_path=root,

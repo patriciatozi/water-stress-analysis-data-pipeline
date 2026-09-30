@@ -50,7 +50,7 @@ def reusable_result(
         artifact_path=artifact_path,
         manifest_path=manifest_path,
         checksum=actual_checksum,
-        size_bytes=artifact_path.stat().st_size,
+        size_bytes=storage.size(artifact_path),
         state=IngestionState.REUSED,
     )
 

@@ -20,7 +20,7 @@ from shapely.ops import transform as shapely_transform
 
 from water_stress.config import Settings
 from water_stress.ingestion import ibge, mapbiomas
-from water_stress.transformation import spatial_grid
+from water_stress.transformation import common, spatial_grid
 
 LOGGER = logging.getLogger(__name__)
 AGGREGATION_METHOD = "source_pixel_center_count"
@@ -193,28 +193,6 @@ def dataset_path(settings: Settings) -> Path:
     )
 
 
-def _schema_document(schema: pa.Schema) -> dict[str, Any]:
-    return {
-        "dataset": "crop_mask",
-        "columns": [
-            {
-                "name": field.name,
-                "type": str(field.type),
-                "nullable": field.nullable,
-                "unit": (field.metadata or {}).get(b"unit", b"").decode(),
-                "description": (field.metadata or {}).get(b"description", b"").decode(),
-            }
-            for field in schema
-        ],
-    }
-
-
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
 def write_crop_mask(
     settings: Settings,
     table: pa.Table,
@@ -223,11 +201,8 @@ def write_crop_mask(
     source_manifest_path: Path,
 ) -> CropMaskResult:
     root = dataset_path(settings)
-    root.mkdir(parents=True, exist_ok=True)
     output = root / "part-000.parquet"
-    temporary = output.with_suffix(".parquet.tmp")
-    pq.write_table(table, temporary, compression="zstd")
-    temporary.replace(output)
+    common.write_parquet(output, table)
 
     fractions = table.column("soy_fraction").to_pylist()
     soybean_cells = sum(value is not None and value > 0 for value in fractions)
@@ -237,7 +212,7 @@ def write_crop_mask(
             raise ValueError("MapBiomas raster has no CRS")
         source_crs = source.crs.to_string()
         source_resolution = [abs(source.res[0]), abs(source.res[1])]
-    common = {
+    metadata = {
         "dataset": "crop_mask",
         "source": "MapBiomas",
         "source_path": str(source_path),
@@ -258,11 +233,11 @@ def write_crop_mask(
     schema_path = root / "_schema.json"
     quality_path = root / "_quality.json"
     metadata_path = root / "_metadata.json"
-    _write_json(schema_path, _schema_document(table.schema))
-    _write_json(
+    common.write_json(schema_path, common.schema_document("crop_mask", table.schema))
+    common.write_json(
         quality_path,
         {
-            **common,
+            **metadata,
             "row_count": table.num_rows,
             "duplicate_key_count": table.num_rows
             - len(
@@ -284,7 +259,7 @@ def write_crop_mask(
             ),
         },
     )
-    _write_json(metadata_path, common)
+    common.write_json(metadata_path, metadata)
     LOGGER.info(
         "Silver crop mask written",
         extra={"dataset": "crop_mask", "row_count": table.num_rows, "path": str(root)},
@@ -306,9 +281,7 @@ def transform(settings: Settings) -> CropMaskResult:
     source_path = mapbiomas.artifact_path(settings)
     source_manifest_path = source_path.with_suffix(".manifest.json")
     required = (grid_path, boundary_path, source_path, source_manifest_path)
-    missing = [str(path) for path in required if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(f"Required input artifacts not found: {', '.join(missing)}")
+    common.require_files(required)
     table = aggregate_soy_fraction(
         settings,
         grid=pq.read_table(grid_path),

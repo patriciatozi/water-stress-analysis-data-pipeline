@@ -18,6 +18,8 @@ class StorageClient(Protocol):
 
     def checksum(self, path: Path) -> str: ...
 
+    def size(self, path: Path) -> int: ...
+
     def delete(self, path: Path) -> None: ...
 
 
@@ -57,7 +59,14 @@ class LocalStorageClient:
         return digest.hexdigest(), size, header
 
     def checksum(self, path: Path) -> str:
-        return hashlib.sha256(self.read_bytes(path)).hexdigest()
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def size(self, path: Path) -> int:
+        return path.stat().st_size
 
     def delete(self, path: Path) -> None:
         path.unlink(missing_ok=True)

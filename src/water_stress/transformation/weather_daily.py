@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from shapely import contains_xy
 
 from water_stress.config import Settings
 from water_stress.ingestion import ibge, nasa_power
+from water_stress.transformation import common
 
 SOURCE_TO_SILVER = {
     "T2M": ("temperature_mean_c", "C"),
@@ -319,12 +319,6 @@ def dataset_path(settings: Settings) -> Path:
     )
 
 
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
 def write_weather_daily(
     settings: Settings,
     table: pa.Table,
@@ -341,11 +335,8 @@ def write_weather_daily(
     for year in sorted({value.year for value in dates}):
         indices = [index for index, value in enumerate(dates) if value.year == year]
         output = root / f"year={year}" / "part-000.parquet"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_suffix(".parquet.tmp")
         partition = table.take(pa.array(indices, type=pa.int64()))
-        pq.write_table(partition, temporary, compression="zstd")
-        temporary.replace(output)
+        common.write_parquet(output, partition)
         parquet_paths.append(output)
     manifests = [
         json.loads(path.with_suffix(".manifest.json").read_text())
@@ -357,27 +348,15 @@ def write_weather_daily(
         for manifest in manifests
         if isinstance(value := manifest.get("downloaded_at_utc"), str)
     )
-    missing = {name: table[name].null_count for name in table.column_names}
+    missing = common.missing_counts(table)
     cells = set(table["weather_cell_id"].to_pylist())
     numeric_columns = [
         field.name
         for field in table.schema
         if pa.types.is_floating(field.type) and field.name not in {"latitude", "longitude"}
     ]
-    ranges = {
-        column: {
-            "minimum": min(
-                (value for value in table[column].to_pylist() if value is not None),
-                default=None,
-            ),
-            "maximum": max(
-                (value for value in table[column].to_pylist() if value is not None),
-                default=None,
-            ),
-        }
-        for column in numeric_columns
-    }
-    common = {
+    ranges = common.column_ranges(table, numeric_columns)
+    metadata = {
         "dataset": "weather_daily",
         "source": "NASA POWER Daily API",
         "source_extraction_timestamp_min": timestamps[0] if timestamps else None,
@@ -402,25 +381,11 @@ def write_weather_daily(
     schema_path = root / "_schema.json"
     quality_path = root / "_quality.json"
     metadata_path = root / "_metadata.json"
-    _write_json(
-        schema_path,
-        {
-            "dataset": "weather_daily",
-            "columns": [
-                {
-                    "name": field.name,
-                    "type": str(field.type),
-                    "unit": (field.metadata or {}).get(b"unit", b"").decode(),
-                    "description": (field.metadata or {}).get(b"description", b"").decode(),
-                }
-                for field in table.schema
-            ],
-        },
-    )
-    _write_json(
+    common.write_json(schema_path, common.schema_document("weather_daily", table.schema))
+    common.write_json(
         quality_path,
         {
-            **common,
+            **metadata,
             "row_count": table.num_rows,
             "weather_cell_count": len(cells),
             "duplicate_key_count": 0,
@@ -428,7 +393,7 @@ def write_weather_daily(
             "range_by_column": ranges,
         },
     )
-    _write_json(metadata_path, common)
+    common.write_json(metadata_path, metadata)
     return WeatherDailyResult(
         root,
         tuple(parquet_paths),

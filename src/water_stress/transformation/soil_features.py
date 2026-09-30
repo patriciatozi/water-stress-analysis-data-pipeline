@@ -19,7 +19,7 @@ from shapely.ops import transform as shapely_transform
 
 from water_stress.config import Settings
 from water_stress.ingestion import ibge
-from water_stress.transformation import spatial_grid
+from water_stress.transformation import common, spatial_grid
 
 LOGGER = logging.getLogger(__name__)
 SPATIAL_AGGREGATION = "source_pixel_center_arithmetic_mean"
@@ -301,28 +301,6 @@ def dataset_path(settings: Settings) -> Path:
     )
 
 
-def _write_json(path: Path, document: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
-def _schema_document(schema: pa.Schema) -> dict[str, Any]:
-    return {
-        "dataset": "soil_features",
-        "columns": [
-            {
-                "name": field.name,
-                "type": str(field.type),
-                "nullable": field.nullable,
-                "unit": (field.metadata or {}).get(b"unit", b"").decode(),
-                "description": (field.metadata or {}).get(b"description", b"").decode(),
-            }
-            for field in schema
-        ],
-    }
-
-
 def write_soil_features(
     settings: Settings,
     table: pa.Table,
@@ -330,11 +308,8 @@ def write_soil_features(
     grouped_paths: dict[str, dict[tuple[str, str], Path]],
 ) -> SoilFeaturesResult:
     root = dataset_path(settings)
-    root.mkdir(parents=True, exist_ok=True)
     output = root / "part-000.parquet"
-    temporary = output.with_suffix(".parquet.tmp")
-    pq.write_table(table, temporary, compression="zstd")
-    temporary.replace(output)
+    common.write_parquet(output, table)
 
     manifests = [
         json.loads(path.with_suffix(".manifest.json").read_text())
@@ -351,26 +326,14 @@ def write_soil_features(
         reference_path = next(iter(paths.values()))
         with rasterio.open(reference_path) as source:
             resolutions.extend((abs(source.res[0]), abs(source.res[1])))
-    missing = {name: table.column(name).null_count for name in table.column_names}
+    missing = common.missing_counts(table)
     feature_columns = [column for column in table.column_names if column != "grid_id"]
-    ranges = {
-        column: {
-            "minimum": min(
-                (value for value in table.column(column).to_pylist() if value is not None),
-                default=None,
-            ),
-            "maximum": max(
-                (value for value in table.column(column).to_pylist() if value is not None),
-                default=None,
-            ),
-        }
-        for column in feature_columns
-    }
+    ranges = common.column_ranges(table, feature_columns)
     complete_rows = sum(
         all(table.column(column)[index].as_py() is not None for column in feature_columns)
         for index in range(table.num_rows)
     )
-    common = {
+    metadata = {
         "dataset": "soil_features",
         "source": "ISRIC SoilGrids WCS",
         "source_extraction_timestamp_min": timestamps[0] if timestamps else None,
@@ -401,11 +364,11 @@ def write_soil_features(
     schema_path = root / "_schema.json"
     quality_path = root / "_quality.json"
     metadata_path = root / "_metadata.json"
-    _write_json(schema_path, _schema_document(table.schema))
-    _write_json(
+    common.write_json(schema_path, common.schema_document("soil_features", table.schema))
+    common.write_json(
         quality_path,
         {
-            **common,
+            **metadata,
             "row_count": table.num_rows,
             "complete_row_count": complete_rows,
             "duplicate_grid_id_count": table.num_rows
@@ -414,7 +377,7 @@ def write_soil_features(
             "range_by_column": ranges,
         },
     )
-    _write_json(metadata_path, common)
+    common.write_json(metadata_path, metadata)
     LOGGER.info(
         "Silver soil features written",
         extra={"dataset": "soil_features", "row_count": table.num_rows, "path": str(root)},
@@ -433,9 +396,7 @@ def write_soil_features(
 def transform(settings: Settings) -> SoilFeaturesResult:
     grid_path = spatial_grid.dataset_path(settings) / "grid.parquet"
     boundary_path = ibge.artifact_path(settings)
-    missing = [str(path) for path in (grid_path, boundary_path) if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(f"Required input artifacts not found: {', '.join(missing)}")
+    common.require_files((grid_path, boundary_path))
     grouped = source_paths(settings)
     table = aggregate_soil_features(
         settings,
