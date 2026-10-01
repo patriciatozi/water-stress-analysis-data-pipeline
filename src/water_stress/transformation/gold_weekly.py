@@ -136,7 +136,10 @@ def _required_float(value: object, label: str) -> float:
 
 
 def _read_parquet(path: Path, columns: list[str] | None = None) -> pa.Table:
-    return pq.read_table(path, columns=columns)
+    # Read the file directly. ``pq.read_table`` infers Hive partition columns
+    # from parent directories (for example ``year=2023``), which can collide
+    # with columns already persisted in the Parquet schema.
+    return pq.ParquetFile(path).read(columns=columns)
 
 
 def _read_partitioned(root: Path, pattern: str = "year=*/part-000.parquet") -> pa.Table:
