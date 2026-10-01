@@ -427,6 +427,7 @@ def write_item(
     common.write_json(
         quality_path,
         {
+            **common.table_quality(table, ["grid_id", "date", "item_id"]),
             "dataset": "satellite_observation",
             "item_id": item["id"],
             "tile_id": _tile_id(item),

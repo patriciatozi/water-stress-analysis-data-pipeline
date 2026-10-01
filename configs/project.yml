@@ -75,6 +75,16 @@ spatial:
   detail_grid_meters: 250
   indicator_window_days: 7
 
+gold:
+  soy_fraction_threshold: 0.25
+  satellite_max_age_days: 30
+  deficit_reference_mm: 20
+  ndvi_stress_threshold: 0.7
+  ndmi_stress_threshold: 0.2
+  deficit_weight: 0.5
+  ndvi_weight: 0.3
+  ndmi_weight: 0.2
+
 http:
   timeout_seconds: 120
   max_attempts: 3
@@ -83,3 +93,4 @@ http:
 storage:
   root_path: data/bronze
   silver_root_path: data/silver
+  gold_root_path: data/gold

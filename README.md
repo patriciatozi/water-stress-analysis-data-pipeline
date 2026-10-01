@@ -38,7 +38,7 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver `soil_features` | Implementada e testada | Solo SoilGrids de 0–30 cm por `grid_id` |
 | Silver `weather_daily` | Implementada e testada | Clima regional e ETo por célula e data |
 | Silver `satellite_observation` | Implementada e testada localmente | NDVI/NDMI por cena e `grid_id` |
-| Camada Gold | Não iniciada | Integração espaço-temporal e indicadores hídricos |
+| Camada Gold semanal | Implementada inicialmente e testada | Features climáticas, solo, soja e Sentinel-2 opcionais |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
 Os smoke tests anteriores de Sorriso continuam como evidência dos clientes, mas seus artefatos
@@ -147,7 +147,8 @@ src/water_stress/
 │   └── sentinel_2.py
 ├── transformation/
 │   ├── nasa_power.py          # transformação pontual legada
-│   └── spatial_grid.py        # grade estadual GeoParquet de 1 km
+│   ├── spatial_grid.py        # grade estadual GeoParquet de 1 km
+│   └── gold_weekly.py         # features semanais da Gold
 └── pipelines/
     ├── run_ingestion.py
     └── run_transformation.py
@@ -169,7 +170,7 @@ Limite estadual IBGE
       ↓
 Arquivos originais + manifestos na camada Bronze
       ↓
-Transformação NASA POWER → validações → Parquet Silver por ano
+Transformações temáticas Silver → Gold semanal particionada por semana
 ```
 
 ## Organização da camada Bronze
@@ -371,6 +372,32 @@ uv run python -m water_stress.pipelines.run_transformation \
 A leitura usa COGs remotos quando os ativos não existem localmente. Reexecuções de itens concluídos
 reutilizam o Parquet existente.
 
+### Gold semanal de features
+
+A transformação `gold-weekly` cria uma linha por `grid_id` e semana iniciada na segunda-feira.
+Somente células com `soy_fraction >= 0.25` entram na saída. A primeira versão calcula precipitação,
+ETo, balanço hídrico, déficit, dias chuvosos, sequência seca, temperatura, solo e atributos de
+soja. Observações Sentinel-2 são agregadas quando disponíveis; semanas sem cenas permanecem nulas.
+
+```text
+data/gold/water_stress_weekly/state_code=51/
+└── start_date=2023-09-01/end_date=2024-04-30/
+    ├── week_start={YYYY-MM-DD}/part-000.parquet
+    ├── _metadata.json
+    └── _quality.json
+```
+
+Execute depois de materializar as tabelas Silver:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source gold-weekly
+```
+
+As fórmulas iniciais são `water_balance_mm_7d = precipitation_mm_7d - eto_mm_7d` e
+`water_deficit_mm_7d = max(0, -water_balance_mm_7d)`. Elas são indicadores explicáveis, não uma
+prescrição agronômica. O `water_stress_score` combina déficit, NDVI e NDMI normalizados, com pesos
+configuráveis; os parâmetros atuais são provisórios e devem ser validados agronomicamente.
+
 ## Preparação do ambiente
 
 Requisitos:
@@ -473,7 +500,7 @@ uv run mypy src tests
 
 Última validação local desta etapa:
 
-- 41 testes aprovados;
+- 80 testes aprovados;
 - cobertura total superior a 85%;
 - Ruff aprovado;
 - mypy em modo estrito aprovado;
@@ -488,22 +515,23 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 - A Bronze preserva os dados de origem; recortes exatos, conversão de unidades e padronização pertencem à Silver.
 - SoilGrids usa WCS porque a API REST beta está indisponível.
 - O recorte SoilGrids atual usa o bounding box municipal; a máscara pela geometria exata será aplicada depois.
-- Os COGs Sentinel-2 são preservados integralmente. Máscara SCL, escala/offset, reprojeção, NDVI e NDMI ainda não são calculados.
+- O catálogo Sentinel-2 é persistido por padrão; COGs são processados incrementalmente quando
+  selecionados. Máscara SCL, escala/offset, reprojeção, NDVI e NDMI são calculados na Silver.
 - O raster MapBiomas Bronze cobre todo o Brasil e preserva todas as classes. O recorte municipal e
   a máscara binária da classe 39 pertencem à futura Silver geoespacial.
-- A NASA POWER representa o município por um único ponto interno; a comparação com estações INMET poderá ser incorporada na validação futura.
+- A NASA POWER estadual usa células regionais; a comparação com estações INMET permanece fora do
+  escopo atual e poderá ser incorporada na validação futura.
 - O armazenamento atual é local, mas está isolado por `StorageClient` para futura implementação em S3 ou ADLS.
 - Arquivos em `data/` não devem ser enviados ao GitHub.
 
 ## Próximas etapas sugeridas
 
-1. Recortar e harmonizar os rasters SoilGrids por grade espacial.
-2. Aplicar máscara SCL e calcular NDVI/NDMI para as cenas Sentinel-2.
-3. Criar uma grade comum e integrar clima, solo e índices espectrais.
-4. Implementar ETo, ETc, balanço hídrico, déficit e score de risco com premissas documentadas.
-5. Gerar a máscara Silver de soja a partir da classe 39 do MapBiomas.
-6. Adicionar validação com fontes observacionais.
-7. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
+1. Validar agronomicamente os limites e pesos do score provisório.
+2. Refinar a composição temporal do Sentinel-2 e a seleção entre cenas concorrentes.
+3. Persistir a associação espacial entre `grid_id` e `weather_cell_id` se ela for reutilizada por
+   outras tabelas.
+4. Adicionar validação observacional, como INMET, sem alterar a Bronze existente.
+5. Evoluir armazenamento e orquestração somente após estabilizar o MVP local.
 
 ## Como colaborar
 

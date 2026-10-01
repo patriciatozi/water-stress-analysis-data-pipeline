@@ -61,7 +61,8 @@ agregação espacial, separação entre atributos estáticos e temporais e proce
 ### Gold
 
 A Gold une somente os atributos necessários na janela configurada. Geometria, solo e máscara não
-devem ser repetidos diariamente em uma tabela estadual monolítica.
+devem ser repetidos diariamente em uma tabela estadual monolítica. A primeira tabela é
+`water_stress_weekly`, particionada por `week_start` e com chave `grid_id + week_start`.
 
 ## Decisões implementadas nesta etapa
 
@@ -142,7 +143,8 @@ precoce necessário ao processamento Sentinel-2.
 ## Pendências deliberadas
 
 - grade adaptativa de 250 m em hotspots;
-- tabelas Gold e score semanal.
+- score semanal e calibração dos pesos;
+- composição temporal definitiva do Sentinel-2.
 
 Essas pendências não são marcadas como concluídas porque exigem contratos de qualidade e testes
 geoespaciais próprios. A fundação entregue define as chaves, partições, CRS e limites de

@@ -18,7 +18,7 @@ IBGE + NASA POWER + SoilGrids + MapBiomas + Sentinel-2
  Silver: grade + soja + solo + clima + índices de satélite
                          │
                          ▼
-               Gold: ainda não implementada
+               Gold: features semanais iniciais
 ```
 
 Hoje o código:
@@ -47,13 +47,16 @@ Hoje o código:
 - usa colunas em `snake_case`;
 - documenta fonte, CRS, resolução, unidades e versão;
 - valida duplicidades e contabiliza nulos;
+- publica `quality_status` (`passed`, `warning` ou `failed`) e `quality_issues`;
 - documenta agregação e reamostragem;
 - grava por arquivo temporário antes de substituir o destino.
 
 ### Gold
 
-Ainda não existe. Deverá integrar a Silver em janelas semanais e produzir as variáveis do futuro
-score de risco.
+`transformation/gold_weekly.py` produz a tabela `water_stress_weekly`, particionada por semana e
+com chave `grid_id + week_start`. A versão inicial integra solo, fração de soja, meteorologia e
+observações Sentinel-2 quando disponíveis. O score é provisório, configurável e deve ser validado
+agronomicamente antes de uso analítico ou operacional.
 
 ## 3. Configuração
 
@@ -68,7 +71,9 @@ Arquivo: `configs/project.yml`.
 | CRS métrico | `EPSG:5880` | Grade e áreas |
 | Grade principal | 1.000 m | Chave espacial comum |
 | Grade detalhada | 250 m | Uso futuro em hotspots |
-| Janela analítica | 7 dias | Planejada para Gold |
+| Janela analítica | 7 dias | Gold semanal com início na segunda-feira |
+| Filtro de soja | `0.25` | Mínimo configurável de `soy_fraction` |
+| Idade máxima Sentinel-2 | 30 dias | Flag de qualidade futura para observações antigas |
 | Classe de soja | `39` | MapBiomas |
 | Nuvem máxima | 30% | Busca Sentinel-2 |
 
@@ -118,7 +123,7 @@ O arquivo `src/water_stress/config.py` carrega o YAML com Pydantic e valida:
 Pontos de entrada:
 
 - `pipelines/run_ingestion.py`: executa Bronze;
-- `pipelines/run_transformation.py`: executa Silver.
+- `pipelines/run_transformation.py`: executa Silver e a Gold semanal.
 
 ## 5. Componentes compartilhados
 
@@ -152,7 +157,12 @@ filesystem local.
 - escrita atômica de JSON e Parquet com compressão Zstandard;
 - documentação uniforme de schemas;
 - contagem de nulos e faixas de valores;
+- classificação comum de qualidade por chave analítica;
 - validação dos arquivos exigidos por uma transformação.
+
+As regras de qualidade são deliberadamente simples: duplicidades ou chaves nulas produzem
+`failed`; valores ausentes em atributos produzem `warning`; ausência de problemas produz `passed`.
+Valores ausentes ambientais não são convertidos automaticamente em zero.
 
 As fórmulas e regras específicas continuam nos módulos temáticos. A orquestração Bronze aceita as
 interfaces HTTP e de armazenamento por injeção, facilitando testes e uma futura implementação em
@@ -452,6 +462,7 @@ uv run python -m water_stress.pipelines.run_transformation --source crop-mask
 uv run python -m water_stress.pipelines.run_transformation --source soil-features
 uv run python -m water_stress.pipelines.run_transformation --source weather-daily
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
+uv run python -m water_stress.pipelines.run_transformation --source gold-weekly
 ```
 
 Dependências:
@@ -496,7 +507,7 @@ uv run mypy
 Os testes cobrem configuração, HTTP, retry, erros, checksum, idempotência, geometrias, grade,
 conversões de solo, soja, meteorologia, ETo, SCL, escala, offset, NDVI, NDMI, partições e metadados.
 
-Última validação registrada: 71 testes, cobertura de 85,78%, Ruff e mypy aprovados.
+Última validação registrada: 80 testes, cobertura de 86,68%, Ruff e mypy aprovados.
 
 ## 12. Notebooks
 
@@ -514,10 +525,9 @@ uv run --group notebook jupyter lab notebooks/
 
 ## 13. Ainda não implementado
 
-- Gold e agregações semanais;
-- mosaico/prioridade para itens Sentinel da mesma data e tile;
+- calibração agronômica dos parâmetros do score;
+- composição temporal definitiva e prioridade entre itens Sentinel da mesma data e tile;
 - associação persistida de `grid_id` com `weather_cell_id`;
-- balanço hídrico, déficit e score;
 - grade adaptativa de 250 m;
 - validação com INMET;
 - armazenamento S3 ou ADLS.

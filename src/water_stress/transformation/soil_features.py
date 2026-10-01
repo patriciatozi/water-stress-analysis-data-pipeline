@@ -368,6 +368,7 @@ def write_soil_features(
     common.write_json(
         quality_path,
         {
+            **common.table_quality(table, ["grid_id"]),
             **metadata,
             "row_count": table.num_rows,
             "complete_row_count": complete_rows,

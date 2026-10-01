@@ -178,6 +178,7 @@ def write_partitioned(
     common.write_json(
         quality_path,
         {
+            **common.table_quality(table, ["date"]),
             "dataset": "nasa_power_daily",
             "source_path": str(source_path),
             "row_count": table.num_rows,

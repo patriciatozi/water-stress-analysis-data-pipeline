@@ -237,6 +237,7 @@ def write_crop_mask(
     common.write_json(
         quality_path,
         {
+            **common.table_quality(table, ["grid_id", "year"]),
             **metadata,
             "row_count": table.num_rows,
             "duplicate_key_count": table.num_rows

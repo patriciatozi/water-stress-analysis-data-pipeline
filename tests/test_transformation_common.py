@@ -12,6 +12,7 @@ from water_stress.transformation.common import (
     missing_counts,
     require_files,
     schema_document,
+    table_quality,
     write_json,
     write_parquet,
 )
@@ -56,3 +57,21 @@ def test_requires_all_input_files(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError, match=str(missing)):
         require_files((existing, missing))
+
+
+@pytest.mark.parametrize(
+    ("values", "status"),
+    [
+        ([["a", 1], ["b", 2]], "passed"),
+        ([["a", 1], ["a", 2]], "failed"),
+        ([["a", None], ["b", 2]], "warning"),
+    ],
+)
+def test_table_quality_classifies_keys_and_missing_values(
+    values: list[list[object]], status: str
+) -> None:
+    table = pa.table({"grid_id": [row[0] for row in values], "value": [row[1] for row in values]})
+
+    report = table_quality(table, ["grid_id"])
+
+    assert report["quality_status"] == status

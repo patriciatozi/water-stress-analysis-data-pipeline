@@ -130,6 +130,23 @@ class SpatialArchitectureSettings(BaseModel):
         return self
 
 
+class GoldSettings(BaseModel):
+    soy_fraction_threshold: float = Field(default=0.25, ge=0, le=1)
+    satellite_max_age_days: int = Field(default=30, gt=0)
+    deficit_reference_mm: float = Field(default=20.0, gt=0)
+    ndvi_stress_threshold: float = Field(default=0.7, ge=-1, le=1)
+    ndmi_stress_threshold: float = Field(default=0.2, ge=-1, le=1)
+    deficit_weight: float = Field(default=0.5, ge=0, le=1)
+    ndvi_weight: float = Field(default=0.3, ge=0, le=1)
+    ndmi_weight: float = Field(default=0.2, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_score_weights(self) -> GoldSettings:
+        if self.deficit_weight + self.ndvi_weight + self.ndmi_weight <= 0:
+            raise ValueError("At least one Gold score weight must be positive")
+        return self
+
+
 class HttpSettings(BaseModel):
     timeout_seconds: float = Field(gt=0)
     max_attempts: int = Field(ge=1)
@@ -139,6 +156,7 @@ class HttpSettings(BaseModel):
 class StorageSettings(BaseModel):
     root_path: Path
     silver_root_path: Path = Path("data/silver")
+    gold_root_path: Path = Path("data/gold")
 
 
 class Settings(BaseSettings):
@@ -156,6 +174,7 @@ class Settings(BaseSettings):
     sentinel_2: Sentinel2Settings
     mapbiomas: MapBiomasSettings
     spatial: SpatialArchitectureSettings
+    gold: GoldSettings
     http: HttpSettings
     storage: StorageSettings
     config_hash: str = Field(exclude=True)

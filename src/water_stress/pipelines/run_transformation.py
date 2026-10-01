@@ -8,6 +8,7 @@ from pathlib import Path
 from water_stress.config import load_settings
 from water_stress.transformation import (
     crop_mask,
+    gold_weekly,
     nasa_power,
     satellite_observation,
     soil_features,
@@ -28,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
             "soil-features",
             "weather-daily",
             "satellite-observation",
+            "gold-weekly",
         ),
         default="nasa-power",
     )
@@ -126,17 +128,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
-    result = nasa_power.transform(settings)
+    if args.source == "gold-weekly":
+        gold_result = gold_weekly.transform(settings)
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "dataset_path": str(gold_result.dataset_path),
+                    "parquet_paths": [str(path) for path in gold_result.parquet_paths],
+                    "metadata_path": str(gold_result.metadata_path),
+                    "quality_path": str(gold_result.quality_path),
+                    "row_count": gold_result.row_count,
+                    "week_count": gold_result.week_count,
+                }
+            )
+        )
+        return 0
+    nasa_result = nasa_power.transform(settings)
     print(
         json.dumps(
             {
                 "source": args.source,
-                "dataset_path": str(result.dataset_path),
-                "parquet_paths": [str(path) for path in result.parquet_paths],
-                "schema_path": str(result.schema_path),
-                "quality_path": str(result.quality_path),
-                "row_count": result.row_count,
-                "missing_by_column": result.missing_by_column,
+                "dataset_path": str(nasa_result.dataset_path),
+                "parquet_paths": [str(path) for path in nasa_result.parquet_paths],
+                "schema_path": str(nasa_result.schema_path),
+                "quality_path": str(nasa_result.quality_path),
+                "row_count": nasa_result.row_count,
+                "missing_by_column": nasa_result.missing_by_column,
             }
         )
     )

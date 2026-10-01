@@ -385,6 +385,7 @@ def write_weather_daily(
     common.write_json(
         quality_path,
         {
+            **common.table_quality(table, ["weather_cell_id", "date"]),
             **metadata,
             "row_count": table.num_rows,
             "weather_cell_count": len(cells),
