@@ -170,8 +170,9 @@ uv run python -m water_stress.pipelines.run_transformation --source weather-dail
   de soja cobertas e limita a 10 tiles por mês; `--tiles-per-month` ajusta esse limite,
   `--max-items` limita o lote da execução e `--coverage all` processa todos os itens do catálogo.
   A cota mensal considera partições completas já existentes e pula meses que já atingiram o limite.
-  O índice das células de soja é pré-calculado por tile e a transformação usa até dois workers locais;
-  a escrita permanece serializada.
+  O índice das células de soja é pré-calculado uma vez por tile em cada execução e reutilizado entre
+  cenas. A transformação usa até dois workers locais por padrão (`--workers`); a escrita permanece
+  serializada e atômica.
 
 Smoke tests reais:
 
@@ -185,7 +186,7 @@ uv run python -m water_stress.pipelines.run_transformation --source satellite-ob
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --max-items 5
 uv run python -m water_stress.pipelines.run_transformation \
-  --source satellite-observation --tiles-per-month 10 --max-items 30
+  --source satellite-observation --tiles-per-month 10 --workers 2 --max-items 30
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --coverage all --max-items 20
 uv run python -m water_stress.pipelines.run_transformation \
@@ -262,16 +263,48 @@ Fontes individuais de ingestão: `ibge`, `nasa-power`, `soilgrids`, `sentinel-2`
 
 Após `satellite_observation`:
 
-- 92 testes aprovados;
-- cobertura total de 85,98%;
+- 98 testes aprovados;
+- cobertura total de 85,08%;
 - Ruff e formatação aprovados;
 - mypy estrito aprovado;
 - smoke tests reais de todas as tabelas Silver estaduais;
 - nenhum dado Bronze, Silver ou COG versionado.
 
+## Atualização desta sessão — 2026-10-03
+
+Foram implementadas otimizações locais para a transformação Sentinel-2:
+
+- `sentinel_2.max_tiles_per_month` define 10 por padrão; a execução atual pode sobrescrever com
+  `--tiles-per-month 10`;
+- a cota mensal é cumulativa: Parquet e `_quality.json` completos já existentes contam para o mês;
+  meses que atingiram a cota são pulados e meses parciais recebem somente os tiles restantes;
+- a seleção prioriza a maior quantidade estimada de células de soja cobertas pelo footprint do tile,
+  usando menor nebulosidade como desempate;
+- o índice espacial de células candidatas é calculado uma vez por `tile_id` em memória e reutilizado
+  nas cenas do mesmo tile;
+- `sentinel_2.max_workers=2` limita o processamento local concorrente; `--workers 1` pode ser usado
+  para reduzir concorrência quando a fonte remota estiver instável;
+- o processamento de bandas pode ocorrer em paralelo, mas gravação de Parquet, qualidade e manifestos
+  permanece serializada e atômica;
+- logs registram candidatos, pendências, quantidade selecionada, tiles indexados e workers;
+- não foi implementado cache persistente dos COGs; as bandas continuam sendo lidas remotamente;
+- a ingestão Bronze não precisa ser repetida para usar essas melhorias.
+
+Comando recomendado para retomar o processamento:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation \
+  --tiles-per-month 10 \
+  --workers 2
+```
+
+As alterações desta sessão foram apenas locais e ainda não foram commitadas nem enviadas ao remoto.
+
 ## Limitações e decisões abertas
 
-- O catálogo Sentinel-2 possui 3.128 itens e deve continuar incremental e monitorado.
+- O catálogo Sentinel-2 local possui 3.359 itens, distribuídos entre setembro de 2023 e abril de
+  2024, e deve continuar incremental e monitorado.
 - Podem existir múltiplos itens STAC para a mesma data e tile. A Gold usa a observação mais recente
   anterior ao fim da semana, limitada por `satellite_max_age_days=30`; mosaico ou prioridade entre
   itens da mesma data e tile ainda deve ser definido.
@@ -305,9 +338,10 @@ Após `satellite_observation`:
 | `ddc5190` | Silver `weather_daily` e ETo |
 | `065af5d` | Silver `satellite_observation` |
 
-Estado desta atualização: seleção mensal Sentinel-2, janela temporal Gold e documentação de
-persistência foram atualizadas localmente. As alterações desta atualização ainda não foram
-commitadas nem enviadas ao remoto.
+Estado desta atualização: seleção mensal Sentinel-2, cota cumulativa por mês, índice espacial
+reutilizável, workers locais controlados, janela temporal Gold e documentação de persistência foram
+atualizados localmente. As alterações desta atualização ainda não foram commitadas nem enviadas ao
+remoto.
 
 ## Prompt para continuar no ChatGPT Web
 
@@ -319,8 +353,10 @@ docs/data_architecture.md.
 O MVP atual cobre Mato Grosso (state_code=51) de 01/09/2023 a 30/04/2024. A Bronze de IBGE,
 NASA POWER regional, SoilGrids, Sentinel-2 L2A e MapBiomas está implementada. A Silver estadual
 possui dim_spatial_grid, crop_mask, soil_features, weather_daily e satellite_observation. A Gold
-semanal, a persistência PostgreSQL/PostGIS e a seleção mensal de cenas Sentinel-2 estão implementadas;
-as próximas decisões são o mosaico/prioridade entre cenas concorrentes e a evolução do armazenamento.
+semanal, a persistência PostgreSQL/PostGIS, a seleção mensal limitada por tile e o índice espacial
+reutilizável estão implementados. A próxima execução recomendada usa 10 tiles por mês e 2 workers;
+as próximas decisões de produto são o mosaico/prioridade entre cenas concorrentes e a evolução do
+armazenamento.
 
 Antes de sugerir alterações, confirme o estado descrito nesta memória. Não presuma que dados locais
 estejam versionados. Não faça commit nem push sem minha autorização explícita.
