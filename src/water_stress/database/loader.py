@@ -92,6 +92,10 @@ DATASET_COLUMNS: dict[str, tuple[str, ...]] = {
         "water_stress_score",
         "water_stress_class",
         "score_component_count",
+        "weather_cell_id",
+        "weather_expected_days",
+        "score_status",
+        "score_available_weight",
     ),
 }
 

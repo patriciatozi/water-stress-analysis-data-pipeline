@@ -200,3 +200,12 @@ precoce necessário ao processamento Sentinel-2.
 Essas pendências não são marcadas como concluídas porque exigem contratos de qualidade e testes
 geoespaciais próprios. A fundação entregue define as chaves, partições, CRS e limites de
 materialização necessários para implementá-las sem retrabalho arquitetural.
+
+### Contrato de consumo Gold v1
+
+`gold.water_stress_dashboard` é uma view da Gold semanal com a dimensão espacial, criada
+pela migration `002_gold_consumption.sql`. Oferece score 0–100 derivado do índice 0–1,
+classe, status de disponibilidade, fração de pesos disponíveis, centróide, geometria
+EPSG:5880 e área equivalente de soja. A chave continua `grid_id + week_start`.
+O índice acadêmico e suas políticas de ausência estão documentados em
+`implementation_guide.md`, seção “Gold de consumo”. A calibração agronômica segue pendente.

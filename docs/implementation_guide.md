@@ -607,3 +607,52 @@ uv run --group notebook jupyter lab notebooks/
 - ETo depende das premissas FAO-56 registradas.
 - Sentinel-2 deve continuar incremental até existir estimativa de custo e tempo.
 - Dados locais nunca devem ser adicionados ao Git.
+
+## Gold de consumo — índice acadêmico v1
+
+`water_stress_weekly` mantém uma linha por `grid_id + week_start`, para células com
+`soy_fraction >= 0,25`. Semanas começam segunda-feira; extremos usam somente datas do estudo.
+O índice final do pipeline permanece sujeito a calibração agronômica. Solo é contexto, não
+componente do índice; não há modelagem de armazenamento no solo, estágio fenológico ou ETc.
+
+- Déficit: `max(0, ETo - P)` em mm no período, componente `clip(déficit / 20, 0, 1)`.
+- NDVI: `clip((0,7 - NDVI) / 0,7, 0, 1)`; NDMI: `clip((0,2 - NDMI) / 0,2, 0, 1)`.
+- Score: média ponderada dos componentes disponíveis, pesos padrão 0,5 / 0,3 / 0,2.
+  Componentes com peso zero são excluídos da contagem. Valores zero são válidos.
+- Classes: `low` abaixo de 1/3, `moderate` de 1/3 a menos de 2/3, `high` a partir de 2/3.
+- Meteorologia: centro NASA POWER mais próximo em coordenadas geográficas, sem interpolação.
+  Essa associação não representa distância métrica. Precipitação e ETo devem existir para
+  todos os dias esperados; caso contrário, score e classe são nulos, status `unavailable`.
+- Sentinel-2: última data até o fim da semana, idade máxima 30 dias; cenas concorrentes nessa
+  data usam mediana dos índices médios e média dos percentuais, sem mosaico de pixels.
+  Ausência de satélite permite score `partial`; todos os componentes configurados dão `complete`.
+  `score_available_weight` informa a fração dos pesos disponíveis, não confiança estatística.
+
+Saída: Parquet Zstandard por semana, schema, qualidade e metadados com checksums dos inputs.
+Checkpoints por semana reutilizam somente outputs íntegros com os mesmos inputs e parâmetros.
+Uma mudança de dados ou parâmetros recalcula as partições. A grade usa EPSG:5880 e resolução
+configurada (padrão 1 km); a tabela Gold referencia a geometria por chave.
+
+Para gerar os arquivos e atualizar o serving opcional:
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source gold-weekly
+uv run python -m water_stress.pipelines.run_database --migrate
+uv run python -m water_stress.pipelines.run_database --load --dataset water_stress_weekly
+```
+
+A migration `002_gold_consumption.sql` adiciona o contrato e cria
+`gold.water_stress_dashboard`, com centróides, geometria EPSG:5880, área equivalente de soja
+(`area_km2 * soy_fraction`) e score percentual. Após migrar, regenere e recarregue a Gold;
+linhas antigas ficam com status nulo até a recarga. O dashboard deve filtrar por semana,
+exibir indisponíveis separadamente e permitir filtrar `score_status`; scores parciais podem
+ter pesos diferentes entre células. Para agregar risco estadual, use média ponderada pela
+área equivalente de soja e publique a cobertura de área com score junto à média.
+
+```sql
+SELECT grid_id, centroid_latitude, centroid_longitude,
+       water_stress_score_pct, water_stress_class, score_status,
+       score_available_weight, satellite_age_days
+FROM gold.water_stress_dashboard
+WHERE week_start = DATE '2023-09-04';
+```

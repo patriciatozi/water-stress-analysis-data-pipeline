@@ -243,3 +243,53 @@ def test_writes_partitioned_gold_dataset(settings: Settings) -> None:
     assert result.metadata_path.is_file()
     assert result.quality_path.is_file()
     assert json.loads(result.quality_path.read_text())["quality_status"] == "warning"
+    first = result.parquet_paths[0]
+    modified = first.stat().st_mtime_ns
+    assert gold_weekly.transform(settings).row_count == result.row_count
+    assert first.stat().st_mtime_ns == modified
+    first.write_bytes(b"interrupted output")
+    gold_weekly.transform(settings)
+    assert first.read_bytes()[:4] == b"PAR1"
+
+
+def _consumption_table(settings: Settings, weather: pa.Table) -> pa.Table:
+    return gold_weekly.build_weekly_table(
+        settings,
+        grid=pa.table(
+            {"grid_id": ["soy"], "centroid_latitude": [0.0], "centroid_longitude": [0.0]}
+        ),
+        crop=pa.table({"grid_id": ["soy"], "soy_fraction": [0.5]}),
+        soil=pa.table({"grid_id": ["soy"]}),
+        weather=weather,
+        week=(date(2023, 8, 28), date(2023, 9, 3)),
+    )
+
+
+def test_partial_weather_never_produces_risk_score(settings: Settings) -> None:
+    table = _consumption_table(settings, _weather_table().slice(0, 2))
+    assert table["water_stress_score"].to_pylist() == [None]
+    assert table["score_status"].to_pylist() == ["unavailable"]
+    assert table["weather_expected_days"].to_pylist() == [3]
+
+
+def test_complete_weather_without_satellite_has_explicit_partial_status(settings: Settings) -> None:
+    table = _consumption_table(settings, _weather_table())
+    assert table["score_status"].to_pylist() == ["partial"]
+    assert table["score_available_weight"].to_pylist() == [0.5]
+    assert table["weather_cell_id"].to_pylist() == ["cell-1"]
+
+
+def test_duplicate_weather_is_rejected(settings: Settings) -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="duplicate"):
+        _consumption_table(settings, pa.concat_tables([_weather_table(), _weather_table()]))
+
+
+def test_missing_eto_does_not_compare_unpaired_totals(settings: Settings) -> None:
+    weather = _weather_table().set_column(
+        5, "reference_evapotranspiration_mm_day", pa.array([4.0, None, 4.0])
+    )
+    table = _consumption_table(settings, weather)
+    assert table["water_deficit_mm_7d"].to_pylist() == [None]
+    assert table["water_stress_score"].to_pylist() == [None]

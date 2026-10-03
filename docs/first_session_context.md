@@ -361,3 +361,18 @@ armazenamento.
 Antes de sugerir alterações, confirme o estado descrito nesta memória. Não presuma que dados locais
 estejam versionados. Não faça commit nem push sem minha autorização explícita.
 ```
+
+## Gold de consumo — atualização 2026-10-03
+
+A Gold mantém o índice acadêmico ponderado vigente e agora distingue score completo, parcial e
+indisponível. Meteorologia incompleta impede classificação; satélite ausente permite índice
+parcial com cobertura de pesos explícita. A migration 002 cria a view de consumo para dashboard.
+Partições têm checkpoints com checksums para restart seguro. Consulte o contrato de consumo
+no guia de implementação. Calibração agronômica e validação observacional continuam pendentes.
+
+Validação local da Gold de consumo: 4.839.624 linhas em 36 semanas, 134.434 células por semana;
+1.107.000 scores completos e 3.732.624 parciais; nenhum indisponível nessa execução. Intervalo
+observado [0, 1]. Qualidade global `warning` por valores ausentes nos atributos opcionais.
+102 testes passaram, cobertura 85,30%, Ruff, formatação e mypy aprovados. A fixture de testes
+agora isola também a raiz Gold em diretório temporário. A migration 002 ainda não foi aplicada
+a uma instância PostgreSQL nesta sessão. Nenhum commit ou push foi realizado.

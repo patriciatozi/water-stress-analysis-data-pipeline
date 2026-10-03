@@ -16,6 +16,7 @@ def settings(tmp_path: Path) -> Settings:
                 update={
                     "root_path": tmp_path / "bronze",
                     "silver_root_path": tmp_path / "silver",
+                    "gold_root_path": tmp_path / "gold",
                 }
             ),
             "soilgrids": loaded.soilgrids.model_copy(update={"chunk_size_meters": 1_000_000_000}),

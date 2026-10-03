@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from math import isfinite
 from pathlib import Path
 from statistics import fmean, median
 from typing import Any, cast
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from shapely.geometry import Point
 from shapely.strtree import STRtree
@@ -88,19 +92,28 @@ def gold_schema(settings: Settings) -> pa.Schema:
                 "water_stress_score",
                 pa.float64(),
                 "score",
-                "Provisional explainable score from 0 to 1",
+                "Explainable academic risk index from 0 to 1",
             ),
             _field(
                 "water_stress_class",
                 pa.string(),
                 "category",
-                "Provisional low, moderate or high risk",
+                "Low, moderate or high academic risk",
             ),
             _field(
                 "score_component_count",
                 pa.int16(),
                 "components",
                 "Available score components",
+            ),
+            _field("weather_cell_id", pa.string(), "identifier", "Assigned weather cell"),
+            _field("weather_expected_days", pa.int16(), "days", "Study days in this week"),
+            _field("score_status", pa.string(), "category", "complete, partial or unavailable"),
+            _field(
+                "score_available_weight",
+                pa.float64(),
+                "fraction",
+                "Fraction of configured weight available",
             ),
         ],
         metadata={
@@ -152,9 +165,18 @@ def _read_partitioned(root: Path, pattern: str = "year=*/part-000.parquet") -> p
 def _weather_by_week(table: pa.Table) -> dict[tuple[str, date], dict[str, Any]]:
     grouped: dict[tuple[str, date], list[dict[str, Any]]] = defaultdict(list)
     columns = {name: table[name].to_pylist() for name in table.column_names}
+    seen: set[tuple[str, date]] = set()
     for index, observation_date in enumerate(columns["date"]):
         if not isinstance(observation_date, date):
-            continue
+            raise ValueError("weather_daily contains an invalid date")
+        daily_key = (str(columns["weather_cell_id"][index]), observation_date)
+        if daily_key in seen:
+            raise ValueError("weather_daily contains duplicate cell/date keys")
+        seen.add(daily_key)
+        for name in ("precipitation_mm_day", "reference_evapotranspiration_mm_day"):
+            value = columns[name][index]
+            if value is not None and (not isfinite(float(value)) or float(value) < 0):
+                raise ValueError(f"weather_daily contains invalid {name}")
         key = (str(columns["weather_cell_id"][index]), _week_start(observation_date))
         grouped[key].append({name: values[index] for name, values in columns.items()})
 
@@ -170,7 +192,9 @@ def _weather_by_week(table: pa.Table) -> dict[tuple[str, date], dict[str, Any]]:
             for row in rows
             if row["reference_evapotranspiration_mm_day"] is not None
         ]
-        balance = None if not precipitation or not eto else sum(precipitation) - sum(eto)
+        balance = (
+            sum(precipitation) - sum(eto) if len(precipitation) == len(rows) == len(eto) else None
+        )
         result[key] = {
             "latitude": rows[0]["latitude"],
             "longitude": rows[0]["longitude"],
@@ -195,7 +219,11 @@ def _mean(rows: Iterable[dict[str, Any]], column: str) -> float | None:
 
 def _maximum_dry_run(rows: list[dict[str, Any]]) -> int:
     maximum = current = 0
+    previous: date | None = None
     for row in sorted(rows, key=lambda value: value["date"]):
+        if previous is not None and (row["date"] - previous).days != 1:
+            current = 0
+        previous = row["date"]
         precipitation = row["precipitation_mm_day"]
         if precipitation is not None and float(precipitation) <= 0:
             current += 1
@@ -206,6 +234,12 @@ def _maximum_dry_run(rows: list[dict[str, Any]]) -> int:
 
 
 def _nearest_weather_cells(grid: pa.Table, weather: pa.Table) -> dict[str, str]:
+    # Daily rows share spatial coordinates; index each native cell only once.
+    weather = (
+        weather.select(["weather_cell_id", "latitude", "longitude"])
+        .group_by(["weather_cell_id", "latitude", "longitude"])
+        .aggregate([])
+    )
     weather_ids = [str(value) for value in weather["weather_cell_id"].to_pylist()]
     points = [
         Point(
@@ -265,6 +299,11 @@ def _satellite_for_week(
         return {}
     latest_date = max(row["date"] for row in candidates)
     rows = [row for row in candidates if row["date"] == latest_date]
+    for row in rows:
+        for name in ("ndvi_mean", "ndmi_mean"):
+            value = row[name]
+            if value is not None and (not isfinite(float(value)) or not -1 <= float(value) <= 1):
+                raise ValueError(f"satellite_observation contains invalid {name}")
     return {
         "ndvi_median": _median(rows, "ndvi_mean"),
         "ndmi_median": _median(rows, "ndmi_mean"),
@@ -291,6 +330,8 @@ def _lower_is_stress(value: float, threshold: float) -> float:
 
 def _score(settings: Settings, values: dict[str, Any]) -> tuple[float | None, str | None, int]:
     components: list[tuple[float, float]] = []
+    if values.get("water_deficit_mm_7d") is None:
+        return None, None, 0
     deficit = values.get("water_deficit_mm_7d")
     if deficit is not None:
         components.append(
@@ -315,6 +356,7 @@ def _score(settings: Settings, values: dict[str, Any]) -> tuple[float | None, st
                 _lower_is_stress(float(ndmi), settings.gold.ndmi_stress_threshold),
             )
         )
+    components = [(weight, value) for weight, value in components if weight > 0]
     available_weight = sum(weight for weight, _ in components)
     if available_weight <= 0:
         return None, None, 0
@@ -332,9 +374,18 @@ def build_weekly_table(
     weather: pa.Table,
     satellite: pa.Table | None = None,
     week: tuple[date, date],
+    weather_cells: dict[str, str] | None = None,
 ) -> pa.Table:
     if not {"grid_id", "centroid_latitude", "centroid_longitude"}.issubset(grid.column_names):
         raise ValueError("dim_spatial_grid lacks the required analytical columns")
+    for dataset_label, table, keys in (
+        ("grid", grid, ["grid_id"]),
+        ("crop", crop, ["grid_id"]),
+        ("soil", soil, ["grid_id"]),
+    ):
+        report = common.table_quality(table, keys)
+        if report["quality_status"] == "failed":
+            raise ValueError(f"{dataset_label} has invalid or duplicate primary keys")
     crop_by_grid = {
         str(grid_id): value
         for grid_id, value in zip(
@@ -348,15 +399,39 @@ def build_weekly_table(
         for index, grid_id in enumerate(soil_columns["grid_id"])
         if str(grid_id) in crop_by_grid
     }
+    week_start, week_end = week
+    first_day = max(week_start, settings.study.start_date)
+    expected_days = (week_end - first_day).days + 1
+    weather_ids = (
+        weather_cells if weather_cells is not None else _nearest_weather_cells(grid, weather)
+    )
+    weather = weather.filter(
+        pc.and_(
+            pc.greater_equal(weather["date"], pa.scalar(first_day)),
+            pc.less_equal(weather["date"], pa.scalar(week_end)),
+        )
+    )
     weather_by_key = _weather_by_week(weather)
-    weather_ids = _nearest_weather_cells(grid, weather)
+    if satellite is not None:
+        satellite = satellite.filter(
+            pc.and_(
+                pc.greater_equal(
+                    satellite["date"],
+                    pa.scalar(week_end - timedelta(days=settings.gold.satellite_max_age_days)),
+                ),
+                pc.less_equal(satellite["date"], pa.scalar(week_end)),
+            )
+        )
     satellite_by_grid = _satellite_by_grid(satellite) if satellite is not None else {}
     week_start, week_end = week
     columns: dict[str, list[Any]] = {name: [] for name in gold_schema(settings).names}
     grid_ids = [str(value) for value in grid["grid_id"].to_pylist() if str(value) in crop_by_grid]
     for grid_id in grid_ids:
         weather_key = (weather_ids[grid_id], week_start)
-        weather_values = weather_by_key.get(weather_key, {})
+        weather_values = dict(weather_by_key.get(weather_key, {}))
+        if weather_values.get("weather_observation_count") != expected_days:
+            weather_values["water_deficit_mm_7d"] = None
+            weather_values["water_balance_mm_7d"] = None
         satellite_values = _satellite_for_week(
             satellite_by_grid,
             grid_id=grid_id,
@@ -384,6 +459,19 @@ def build_weekly_table(
         values["water_stress_score"] = score
         values["water_stress_class"] = label
         values["score_component_count"] = component_count
+        weights = (
+            (settings.gold.deficit_weight, "water_deficit_mm_7d"),
+            (settings.gold.ndvi_weight, "ndvi_median"),
+            (settings.gold.ndmi_weight, "ndmi_median"),
+        )
+        available = sum(weight for weight, name in weights if values.get(name) is not None)
+        total = sum(weight for weight, _ in weights)
+        values["score_available_weight"] = available / total if score is not None else 0.0
+        values["score_status"] = (
+            "unavailable" if score is None else "complete" if available == total else "partial"
+        )
+        values["weather_cell_id"] = weather_ids[grid_id]
+        values["weather_expected_days"] = expected_days
         for name in columns:
             columns[name].append(values.get(name))
     return pa.table(columns, schema=gold_schema(settings))
@@ -402,7 +490,31 @@ def dataset_path(settings: Settings) -> Path:
 def _satellite_table(settings: Settings) -> pa.Table | None:
     root = satellite_observation.dataset_path(settings)
     paths = sorted(root.rglob("*.parquet")) if root.is_dir() else []
-    return pa.concat_tables([_read_parquet(path) for path in paths]) if paths else None
+    return (
+        pa.concat_tables(
+            [
+                _read_parquet(
+                    path,
+                    [
+                        "grid_id",
+                        "date",
+                        "ndvi_mean",
+                        "ndmi_mean",
+                        "valid_pixel_pct",
+                        "cloud_pixel_pct",
+                    ],
+                )
+                for path in paths
+            ]
+        )
+        if paths
+        else None
+    )
+
+
+def _checksum(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def transform(settings: Settings) -> GoldWeeklyResult:
@@ -411,16 +523,55 @@ def transform(settings: Settings) -> GoldWeeklyResult:
     soil_path = soil_features.dataset_path(settings) / "part-000.parquet"
     weather_root = weather_daily.dataset_path(settings)
     common.require_files((grid_path, crop_path, soil_path))
-    grid = _read_parquet(grid_path)
+    grid = _read_parquet(grid_path, ["grid_id", "centroid_latitude", "centroid_longitude"])
     crop = _read_parquet(crop_path)
-    soil = _read_parquet(soil_path)
+    soil = _read_parquet(soil_path, ["grid_id", "clay_pct", "sand_pct", "soc", "bulk_density"])
     weather = _read_partitioned(weather_root)
     satellite = _satellite_table(settings)
+    crop = crop.filter(
+        pc.greater_equal(crop["soy_fraction"], pa.scalar(settings.gold.soy_fraction_threshold))
+    )
+    grid = grid.filter(pc.is_in(grid["grid_id"], value_set=crop["grid_id"]))
+    soil = soil.filter(pc.is_in(soil["grid_id"], value_set=crop["grid_id"]))
+    weather_cells = _nearest_weather_cells(grid, weather)
     output_root = dataset_path(settings)
+    input_paths = [
+        grid_path,
+        crop_path,
+        soil_path,
+        *sorted(weather_root.glob("year=*/part-000.parquet")),
+        *sorted(satellite_observation.dataset_path(settings).rglob("*.parquet")),
+    ]
+    lineage = {
+        str(path.relative_to(settings.storage.silver_root_path)): _checksum(path)
+        for path in input_paths
+    }
+    signature = hashlib.sha256(
+        json.dumps(
+            {
+                "inputs": lineage,
+                "gold": settings.gold.model_dump(mode="json"),
+                "study": settings.study.model_dump(mode="json"),
+                "contract": "gold-consumption-v1",
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     parquet_paths: list[Path] = []
     row_count = 0
     quality_reports: list[dict[str, Any]] = []
     for week in _study_weeks(settings):
+        output = output_root / f"week_start={week[0].isoformat()}" / "part-000.parquet"
+        checkpoint = output.parent / "_quality.json"
+        if output.is_file() and checkpoint.is_file():
+            saved = json.loads(checkpoint.read_text())
+            if saved.get("input_signature") == signature and saved.get("checksum") == _checksum(
+                output
+            ):
+                parquet_paths.append(output)
+                row_count += saved["row_count"]
+                quality_reports.append(saved)
+                continue
         table = build_weekly_table(
             settings,
             grid=grid,
@@ -429,12 +580,29 @@ def transform(settings: Settings) -> GoldWeeklyResult:
             weather=weather,
             satellite=satellite,
             week=week,
+            weather_cells=weather_cells,
         )
         output = output_root / f"week_start={week[0].isoformat()}" / "part-000.parquet"
         common.write_parquet(output, table)
         parquet_paths.append(output)
         row_count += table.num_rows
-        quality_reports.append(common.table_quality(table, ["grid_id", "week_start"]))
+        report = {
+            **common.table_quality(table, ["grid_id", "week_start"]),
+            "row_count": table.num_rows,
+            "input_signature": signature,
+            "checksum": _checksum(output),
+        }
+        common.write_json(checkpoint, report)
+        quality_reports.append(report)
+        LOGGER.info(
+            "Gold partition written",
+            extra={
+                "source": "silver",
+                "operation": "gold",
+                "partition": week[0].isoformat(),
+                "outcome": "written",
+            },
+        )
 
     metadata_path = output_root / "_metadata.json"
     quality_path = output_root / "_quality.json"
@@ -447,7 +615,12 @@ def transform(settings: Settings) -> GoldWeeklyResult:
         "water_balance_formula": "precipitation_mm_7d - eto_mm_7d",
         "water_deficit_formula": "max(0, -water_balance_mm_7d)",
         "score_formula": "weighted normalized deficit, NDVI and NDMI stress components",
-        "score_status": "provisional; thresholds and weights require agronomic validation",
+        "score_status": "academic index v1; agronomic calibration pending",
+        "primary_key": ["grid_id", "week_start"],
+        "input_checksums": lineage,
+        "input_signature": signature,
+        "missing_policy": "complete daily precipitation/ETo required; satellite optional",
+        "class_thresholds": {"moderate": 1 / 3, "high": 2 / 3},
         "score_parameters": {
             "deficit_reference_mm": settings.gold.deficit_reference_mm,
             "ndvi_stress_threshold": settings.gold.ndvi_stress_threshold,
@@ -458,9 +631,13 @@ def transform(settings: Settings) -> GoldWeeklyResult:
         },
         "consecutive_dry_days_rule": "daily precipitation <= 0; missing precipitation breaks a run",
         "processing_version": settings.project.version,
-        "processed_at_utc": datetime.now().astimezone().isoformat(),
+        "processed_at_utc": datetime.now(UTC).isoformat(),
     }
     common.write_json(metadata_path, metadata)
+    common.write_json(
+        output_root / "_schema.json",
+        common.schema_document("water_stress_weekly", gold_schema(settings)),
+    )
     statuses = [str(report["quality_status"]) for report in quality_reports]
     quality_status = (
         "failed" if "failed" in statuses else "warning" if "warning" in statuses else "passed"
