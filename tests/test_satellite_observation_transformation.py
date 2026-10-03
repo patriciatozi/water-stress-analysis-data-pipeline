@@ -100,6 +100,148 @@ def test_selects_lowest_cloud_scene_for_each_month_and_tile() -> None:
     ]
 
 
+def test_limits_monthly_selection_to_lowest_cloud_tiles() -> None:
+    september_first = _item("S2A_21LWG_20230901_0_L2A")
+    september_first["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 20.0,
+    }
+    september_second = _item("S2A_21LWH_20230901_0_L2A")
+    september_second["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 5.0,
+    }
+    september_third = _item("S2A_21LWJ_20230901_0_L2A")
+    september_third["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 10.0,
+    }
+    october = _item("S2A_21LWG_20231001_0_L2A")
+    october["properties"] = {
+        "datetime": "2023-10-01T14:00:00Z",
+        "eo:cloud_cover": 1.0,
+    }
+
+    selected = satellite_observation.select_items(
+        [september_first, september_second, september_third, october],
+        item_ids=None,
+        max_items=None,
+        max_tiles_per_month=2,
+        tile_row_counts={"21LWG": 30, "21LWH": 10, "21LWJ": 20},
+    )
+
+    assert [str(item["id"]) for item in selected] == [
+        "S2A_21LWG_20230901_0_L2A",
+        "S2A_21LWJ_20230901_0_L2A",
+        "S2A_21LWG_20231001_0_L2A",
+    ]
+
+
+def test_rejects_nonpositive_monthly_tile_limit() -> None:
+    with pytest.raises(ValueError, match="max_tiles_per_month"):
+        satellite_observation.select_items(
+            [_item()],
+            item_ids=None,
+            max_items=None,
+            max_tiles_per_month=0,
+        )
+
+
+def test_skips_full_month_and_fills_partial_month_quota() -> None:
+    september_first = _item("S2A_21LWG_20230901_0_L2A")
+    september_first["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 20.0,
+    }
+    september_second = _item("S2A_21LWH_20230901_0_L2A")
+    september_second["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 5.0,
+    }
+    september_third = _item("S2A_21LWJ_20230901_0_L2A")
+    september_third["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 10.0,
+    }
+    october = _item("S2A_21LWG_20231001_0_L2A")
+    october["properties"] = {
+        "datetime": "2023-10-01T14:00:00Z",
+        "eo:cloud_cover": 1.0,
+    }
+
+    selected = satellite_observation.select_items(
+        [september_first, september_second, september_third, october],
+        item_ids=None,
+        max_items=None,
+        max_tiles_per_month=2,
+        tile_row_counts={"21LWG": 30, "21LWH": 10, "21LWJ": 20},
+        existing_tile_ids_by_month={(2023, 9): {"21LWG"}},
+    )
+
+    assert [str(item["id"]) for item in selected] == [
+        "S2A_21LWJ_20230901_0_L2A",
+        "S2A_21LWG_20231001_0_L2A",
+    ]
+
+    selected = satellite_observation.select_items(
+        [september_first, september_second, september_third, october],
+        item_ids=None,
+        max_items=None,
+        max_tiles_per_month=2,
+        tile_row_counts={"21LWG": 30, "21LWH": 10, "21LWJ": 20},
+        existing_tile_ids_by_month={(2023, 9): {"21LWG", "21LWH"}},
+    )
+
+    assert [str(item["id"]) for item in selected] == ["S2A_21LWG_20231001_0_L2A"]
+
+
+def test_existing_tile_ids_require_complete_output(settings: Settings) -> None:
+    root = satellite_observation.dataset_path(settings)
+    complete = (
+        root / "year=2023" / "month=09" / "tile_id=21LWG" / "item_id=S2A_21LWG_20230901_0_L2A"
+    )
+    complete.mkdir(parents=True)
+    (complete / "part-000.parquet").write_bytes(b"parquet")
+    (complete / "_quality.json").write_text("{}")
+    incomplete = (
+        root / "year=2023" / "month=09" / "tile_id=21LWH" / "item_id=S2A_21LWH_20230901_0_L2A"
+    )
+    incomplete.mkdir(parents=True)
+    (incomplete / "part-000.parquet").write_bytes(b"parquet")
+
+    assert satellite_observation.existing_tile_ids_by_month(settings) == {(2023, 9): {"21LWG"}}
+
+
+def test_transform_rejects_invalid_execution_limits(settings: Settings) -> None:
+    with pytest.raises(ValueError, match="max_items"):
+        satellite_observation.transform(settings, max_items=0)
+    with pytest.raises(ValueError, match="workers"):
+        satellite_observation.transform(settings, workers=0)
+
+
+def test_estimates_tile_rows_from_soy_grid_centroids(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={
+            "spatial": settings.spatial.model_copy(
+                update={"area_crs": "EPSG:4326", "query_crs": "EPSG:4326"}
+            )
+        }
+    )
+    item = _item("S2A_21LWG_20230901_0_L2A")
+    item["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+    }
+
+    scores = satellite_observation.estimate_tile_row_counts(
+        settings,
+        [item],
+        [box(0, 0, 1, 1), box(1, 1, 2, 2), box(3, 3, 4, 4)],
+    )
+
+    assert scores == {"21LWG": 2}
+
+
 def test_rejects_nonpositive_reflectance_after_l2a_offset() -> None:
     accumulators = satellite_observation._empty_accumulators(1)
     satellite_observation._accumulate(
@@ -214,6 +356,7 @@ def test_processes_aligned_local_assets_without_raster_intermediate(settings: Se
         item,  # type: ignore[arg-type]
         grid_ids=["g1"],
         grid_geometries=[box(0, 0, 200, 200)],
+        tile_grid_index={"21LWG": (["g1"], [box(0, 0, 200, 200)])},
     )
 
     assert table.num_rows == 1

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ CLOUD_SCL_CLASSES = frozenset({8, 9, 10})
 HISTOGRAM_BINS = 400
 BLOCK_SIZE = 512
 LOGGER = logging.getLogger(__name__)
+TileGridIndex = dict[str, tuple[list[str], list[BaseGeometry]]]
 
 
 @dataclass(frozen=True)
@@ -178,13 +181,107 @@ def _load_soy_grid(settings: Settings) -> tuple[list[str], list[BaseGeometry]]:
     return ids, geometries
 
 
+def estimate_tile_row_counts(
+    settings: Settings,
+    items: list[dict[str, Any]],
+    grid_geometries: list[BaseGeometry],
+) -> dict[str, int]:
+    """Estimate output rows from soybean-grid centroids covered by each tile footprint."""
+    index = build_tile_grid_index(
+        settings,
+        items,
+        grid_ids=[str(index) for index in range(len(grid_geometries))],
+        grid_geometries=grid_geometries,
+    )
+    return {tile_id: len(tile_data[0]) for tile_id, tile_data in index.items()}
+
+
+def build_tile_grid_index(
+    settings: Settings,
+    items: list[dict[str, Any]],
+    *,
+    grid_ids: list[str],
+    grid_geometries: list[BaseGeometry],
+) -> TileGridIndex:
+    """Build the reusable soybean-grid candidate index for each Sentinel-2 tile."""
+    if len(grid_ids) != len(grid_geometries):
+        raise ValueError("grid_ids and grid_geometries must have the same length")
+    if not grid_geometries:
+        return {}
+    to_query = Transformer.from_crs(settings.spatial.area_crs, "EPSG:4326", always_xy=True)
+    grid_centroids = [
+        shapely_transform(to_query.transform, geometry.centroid) for geometry in grid_geometries
+    ]
+    centroid_tree = STRtree(grid_centroids)
+    tile_index: TileGridIndex = {}
+    for item in items:
+        tile_id = _tile_id(item)
+        if tile_id in tile_index:
+            continue
+        geometry_data = item.get("geometry")
+        if not isinstance(geometry_data, dict):
+            raise ValueError(f"Sentinel-2 item {item.get('id')} has no valid geometry")
+        footprint = shape(geometry_data)
+        candidate_indices = centroid_tree.query(footprint)
+        selected_indices = [
+            int(candidate_index)
+            for candidate_index in candidate_indices
+            if footprint.contains(grid_centroids[int(candidate_index)])
+        ]
+        tile_index[tile_id] = (
+            [grid_ids[candidate_index] for candidate_index in selected_indices],
+            [grid_geometries[candidate_index] for candidate_index in selected_indices],
+        )
+    return tile_index
+
+
+def existing_tile_ids_by_month(settings: Settings) -> dict[tuple[int, int], set[str]]:
+    """Return completed Silver tile IDs grouped by acquisition month."""
+    root = dataset_path(settings)
+    existing: dict[tuple[int, int], set[str]] = {}
+    if not root.is_dir():
+        return existing
+    for year_path in root.glob("year=*"):
+        if not year_path.is_dir():
+            continue
+        try:
+            year = int(year_path.name.removeprefix("year="))
+        except ValueError:
+            continue
+        for month_path in year_path.glob("month=*"):
+            if not month_path.is_dir():
+                continue
+            try:
+                month = int(month_path.name.removeprefix("month="))
+            except ValueError:
+                continue
+            month_tiles = existing.setdefault((year, month), set())
+            for tile_path in month_path.glob("tile_id=*"):
+                if not tile_path.is_dir():
+                    continue
+                complete_item = any(
+                    parquet_path.with_name("_quality.json").is_file()
+                    for parquet_path in tile_path.glob("item_id=*/part-000.parquet")
+                )
+                if complete_item:
+                    month_tiles.add(tile_path.name.removeprefix("tile_id="))
+    return existing
+
+
 def select_items(
     items: list[dict[str, Any]],
     *,
     item_ids: set[str] | None,
     max_items: int | None,
     coverage: Literal["monthly", "all"] = "monthly",
+    max_tiles_per_month: int | None = None,
+    tile_row_counts: Mapping[str, int] | None = None,
+    existing_tile_ids_by_month: Mapping[tuple[int, int], set[str]] | None = None,
 ) -> list[dict[str, Any]]:
+    if max_items is not None and max_items < 1:
+        raise ValueError("max_items must be at least one")
+    if max_tiles_per_month is not None and max_tiles_per_month < 1:
+        raise ValueError("max_tiles_per_month must be at least one")
     ordered = sorted(items, key=lambda item: (_item_datetime(item), str(item["id"])))
     if item_ids:
         selected = [item for item in ordered if item.get("id") in item_ids]
@@ -204,14 +301,40 @@ def select_items(
                 str(current["id"]),
             ):
                 representatives[key] = item
+        monthly_groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for item in representatives.values():
+            acquired = _item_datetime(item)
+            monthly_groups.setdefault((acquired.year, acquired.month), []).append(item)
+        selected_representatives: list[dict[str, Any]] = []
+        for group in monthly_groups.values():
+            first = _item_datetime(group[0])
+            month_key = (first.year, first.month)
+            ranked = sorted(
+                group,
+                key=lambda item: (
+                    -(tile_row_counts.get(_tile_id(item), 0) if tile_row_counts is not None else 0),
+                    _cloud_cover(item),
+                    _item_datetime(item),
+                    _tile_id(item),
+                    str(item["id"]),
+                ),
+            )
+            if max_tiles_per_month is not None:
+                existing_tiles = (
+                    existing_tile_ids_by_month.get(month_key, set())
+                    if existing_tile_ids_by_month is not None
+                    else set()
+                )
+                available = [item for item in ranked if _tile_id(item) not in existing_tiles]
+                remaining = max(0, max_tiles_per_month - len(existing_tiles))
+                ranked = available[:remaining]
+            selected_representatives.extend(ranked)
         ordered = sorted(
-            representatives.values(),
+            selected_representatives,
             key=lambda item: (_item_datetime(item), _tile_id(item), str(item["id"])),
         )
     elif coverage != "all":
         raise ValueError(f"Unsupported Sentinel-2 coverage mode: {coverage}")
-    if max_items is not None and max_items < 1:
-        raise ValueError("max_items must be at least one")
     return ordered if max_items is None else ordered[:max_items]
 
 
@@ -227,6 +350,11 @@ def item_output_path(settings: Settings, item: dict[str, Any]) -> Path:
     )
 
 
+def item_output_is_complete(settings: Settings, item: dict[str, Any]) -> bool:
+    output = item_output_path(settings, item)
+    return output.is_file() and output.with_name("_quality.json").is_file()
+
+
 def dataset_path(settings: Settings) -> Path:
     return (
         settings.storage.silver_root_path / "satellite_observation" / settings.study.partition_key
@@ -239,18 +367,27 @@ def _candidate_cells(
     grid_ids: list[str],
     grid_geometries: list[BaseGeometry],
     target_crs: Any,
+    tile_grid_index: TileGridIndex | None = None,
 ) -> tuple[list[str], list[BaseGeometry]]:
-    to_query = Transformer.from_crs(settings.spatial.area_crs, "EPSG:4326", always_xy=True)
-    footprint = shape(item["geometry"])
-    selected = [
-        index
-        for index, geometry in enumerate(grid_geometries)
-        if footprint.contains(shapely_transform(to_query.transform, geometry.centroid))
-    ]
+    if tile_grid_index is not None:
+        indexed = tile_grid_index.get(_tile_id(item))
+        if indexed is None:
+            return [], []
+        item_grid_ids, item_geometries = indexed
+    else:
+        to_query = Transformer.from_crs(settings.spatial.area_crs, "EPSG:4326", always_xy=True)
+        footprint = shape(item["geometry"])
+        selected = [
+            index
+            for index, geometry in enumerate(grid_geometries)
+            if footprint.contains(shapely_transform(to_query.transform, geometry.centroid))
+        ]
+        item_grid_ids = [grid_ids[index] for index in selected]
+        item_geometries = [grid_geometries[index] for index in selected]
     to_target = Transformer.from_crs(settings.spatial.area_crs, target_crs, always_xy=True)
     return (
-        [grid_ids[index] for index in selected],
-        [shapely_transform(to_target.transform, grid_geometries[index]) for index in selected],
+        item_grid_ids,
+        [shapely_transform(to_target.transform, geometry) for geometry in item_geometries],
     )
 
 
@@ -349,6 +486,7 @@ def process_item(
     *,
     grid_ids: list[str],
     grid_geometries: list[BaseGeometry],
+    tile_grid_index: TileGridIndex | None = None,
 ) -> pa.Table:
     hrefs = {name: _asset_href(settings, item, name) for name in ("red", "nir", "swir16", "scl")}
     mapbiomas_path = mapbiomas.artifact_path(settings)
@@ -373,7 +511,12 @@ def process_item(
         if red_source.shape != nir_source.shape or red_source.transform != nir_source.transform:
             raise ValueError("Sentinel-2 red and NIR assets are not aligned")
         item_grid_ids, item_geometries = _candidate_cells(
-            settings, item, grid_ids, grid_geometries, red_source.crs
+            settings,
+            item,
+            grid_ids,
+            grid_geometries,
+            red_source.crs,
+            tile_grid_index,
         )
         if not item_grid_ids:
             return pa.table(
@@ -442,6 +585,22 @@ def process_item(
                         swir,
                     )
     return _build_table(settings, item, item_grid_ids, accumulators)
+
+
+def _process_item_table(
+    settings: Settings,
+    item: dict[str, Any],
+    grid_ids: list[str],
+    grid_geometries: list[BaseGeometry],
+    tile_grid_index: TileGridIndex,
+) -> pa.Table:
+    return process_item(
+        settings,
+        item,
+        grid_ids=grid_ids,
+        grid_geometries=grid_geometries,
+        tile_grid_index=tile_grid_index,
+    )
 
 
 def write_item(
@@ -531,39 +690,92 @@ def transform(
     item_ids: set[str] | None = None,
     max_items: int | None = None,
     coverage: Literal["monthly", "all"] = "monthly",
+    max_tiles_per_month: int | None = None,
+    workers: int | None = None,
 ) -> list[SatelliteObservationResult]:
+    if max_items is not None and max_items < 1:
+        raise ValueError("max_items must be at least one")
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be at least one")
     items, catalog_manifest = _catalog(settings)
+    grid_ids, grid_geometries = _load_soy_grid(settings)
+    existing_tiles = existing_tile_ids_by_month(settings)
+    tile_grid_index = build_tile_grid_index(
+        settings,
+        items,
+        grid_ids=grid_ids,
+        grid_geometries=grid_geometries,
+    )
+    tile_row_counts = {tile_id: len(tile_data[0]) for tile_id, tile_data in tile_grid_index.items()}
     selected_candidates = select_items(
         items,
         item_ids=item_ids,
         max_items=None,
         coverage=coverage,
+        max_tiles_per_month=(
+            settings.sentinel_2.max_tiles_per_month
+            if max_tiles_per_month is None
+            else max_tiles_per_month
+        ),
+        existing_tile_ids_by_month=existing_tiles,
+        tile_row_counts=(tile_row_counts if coverage == "monthly" and not item_ids else None),
     )
-    pending = [
-        item for item in selected_candidates if not item_output_path(settings, item).is_file()
-    ]
+    pending = [item for item in selected_candidates if not item_output_is_complete(settings, item)]
     selected = pending if max_items is None else pending[:max_items]
-    grid_ids, grid_geometries = _load_soy_grid(settings)
-    results: list[SatelliteObservationResult] = []
+    worker_count = settings.sentinel_2.max_workers if workers is None else workers
+    LOGGER.info(
+        "Sentinel-2 selection prepared",
+        extra={
+            "dataset": "satellite_observation",
+            "candidate_count": len(selected_candidates),
+            "pending_count": len(pending),
+            "selected_count": len(selected),
+            "tile_index_count": len(tile_grid_index),
+            "workers": worker_count,
+        },
+    )
+    results_by_item: dict[str, SatelliteObservationResult] = {}
+    timestamp = catalog_manifest.get("downloaded_at_utc")
+    source_timestamp = timestamp if isinstance(timestamp, str) else None
+
     for item in selected:
-        output = item_output_path(settings, item)
-        quality = output.with_name("_quality.json")
-        if output.is_file() and quality.is_file():
+        if item_output_is_complete(settings, item):
+            output = item_output_path(settings, item)
+            quality = output.with_name("_quality.json")
             table = pq.ParquetFile(output).read()
-            results.append(
-                SatelliteObservationResult(
-                    str(item["id"]), output, quality, table.num_rows, "reused"
-                )
+            results_by_item[str(item["id"])] = SatelliteObservationResult(
+                str(item["id"]), output, quality, table.num_rows, "reused"
             )
-            continue
-        table = process_item(settings, item, grid_ids=grid_ids, grid_geometries=grid_geometries)
-        timestamp = catalog_manifest.get("downloaded_at_utc")
-        results.append(
-            write_item(
-                settings,
-                item,
-                table,
-                source_extraction_timestamp=timestamp if isinstance(timestamp, str) else None,
-            )
+
+    pending_selected = [item for item in selected if str(item["id"]) not in results_by_item]
+
+    def persist(item: dict[str, Any], table: pa.Table) -> None:
+        results_by_item[str(item["id"])] = write_item(
+            settings,
+            item,
+            table,
+            source_extraction_timestamp=source_timestamp,
         )
-    return results
+
+    if worker_count == 1:
+        for item in pending_selected:
+            persist(
+                item,
+                _process_item_table(settings, item, grid_ids, grid_geometries, tile_grid_index),
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    _process_item_table,
+                    settings,
+                    item,
+                    grid_ids,
+                    grid_geometries,
+                    tile_grid_index,
+                ): item
+                for item in pending_selected
+            }
+            for future in as_completed(futures):
+                persist(futures[future], future.result())
+    return [results_by_item[str(item["id"])] for item in selected]

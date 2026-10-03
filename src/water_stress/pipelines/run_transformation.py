@@ -38,7 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-items",
         type=int,
         default=None,
-        help="Optional maximum Sentinel-2 items per run",
+        help="Optional maximum Sentinel-2 items per run after monthly selection",
+    )
+    parser.add_argument(
+        "--tiles-per-month",
+        type=int,
+        default=None,
+        help="Maximum Sentinel-2 tiles selected per month; defaults to project configuration",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Maximum concurrent Sentinel-2 scene processors; defaults to project configuration",
     )
     parser.add_argument(
         "--coverage",
@@ -58,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             item_ids=set(args.item_id) if args.item_id else None,
             max_items=args.max_items,
             coverage=args.coverage,
+            max_tiles_per_month=args.tiles_per_month,
+            workers=args.workers,
         )
         print(
             json.dumps(

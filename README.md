@@ -356,8 +356,8 @@ data/silver/satellite_observation/state_code=51/
 ```
 
 O padrão seleciona uma cena de menor nebulosidade por mês e tile ao longo de todo o período de
-estudo. Isso evita que a Silver fique restrita ao primeiro mês, mantendo o processamento
-incremental e o custo controlado:
+estudo e limita a seleção a 15 tiles por mês. Isso evita que a Silver fique restrita ao primeiro
+mês, mantendo o processamento incremental e o custo controlado:
 
 ```bash
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
@@ -371,12 +371,21 @@ uv run python -m water_stress.pipelines.run_transformation \
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --max-items 5
 uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --tiles-per-month 10 --max-items 30
+uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --coverage all --max-items 20
 ```
 
 A leitura usa COGs remotos quando os ativos não existem localmente. Reexecuções de itens concluídos
-reutilizam o Parquet existente. `--max-items` limita apenas o lote da execução; `--coverage monthly`
-é o padrão e `--coverage all` processa todos os itens do catálogo.
+reutilizam o Parquet existente. `--tiles-per-month` limita a seleção mensal (10 por padrão),
+priorizando tiles com maior quantidade estimada de células de soja cobertas e usando menor
+nebulosidade como desempate. `--max-items` limita o lote total da execução depois da seleção
+mensal; `--coverage monthly` é o padrão e `--coverage all` processa todos os itens do catálogo,
+sem a seleção mensal. O limite mensal é cumulativo: tiles com Parquet e manifesto de qualidade já
+existentes contam para a cota, e meses que já atingiram o limite são pulados.
+O índice espacial de células de soja é calculado uma vez por execução e reutilizado entre cenas.
+O processamento usa até 2 workers por padrão (`--workers`), enquanto a escrita dos Parquets e
+manifestos permanece serializada.
 
 ### Gold semanal de features
 

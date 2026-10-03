@@ -95,6 +95,8 @@ class Sentinel2Settings(BaseModel):
     collection: str = Field(min_length=1)
     max_cloud_cover: float = Field(ge=0, le=100)
     representative_scenes: int = Field(ge=1)
+    max_tiles_per_month: int = Field(default=10, ge=1)
+    max_workers: int = Field(default=2, ge=1, le=4)
     page_limit: int = Field(ge=1, le=1000)
     assets: list[str] = Field(min_length=1)
     download_bronze_assets: bool = False

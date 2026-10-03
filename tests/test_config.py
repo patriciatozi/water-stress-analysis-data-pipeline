@@ -18,6 +18,8 @@ def test_load_default_settings() -> None:
     assert settings.spatial.screening_grid_meters == 1000
     assert settings.study.start_date.isoformat() == "2023-09-01"
     assert settings.mapbiomas.soybean_class == 39
+    assert settings.sentinel_2.max_tiles_per_month == 10
+    assert settings.sentinel_2.max_workers == 2
     assert len(settings.config_hash) == 64
 
 

@@ -168,14 +168,20 @@ Silver deverá:
 7. descartar intermediários de alta resolução.
 
 A tabela `satellite_observation` implementa esse fluxo incrementalmente por item STAC. A seleção
-inicial usa uma cena de menor nebulosidade por combinação de ano, mês e tile; `--coverage all`
-permite processar explicitamente todo o catálogo. A seleção usa células com `soy_fraction > 0`; a
+inicial mantém uma cena por combinação de ano, mês e tile, prioriza tiles com maior quantidade
+estimada de células de soja cobertas e limita a 15 tiles por mês por padrão; `--tiles-per-month`
+ajusta esse limite e `--coverage all` permite processar explicitamente todo o catálogo. A seleção usa células com `soy_fraction > 0`; a
 máscara final usa diretamente a classe 39 MapBiomas reamostrada por vizinho mais próximo para 10 m.
+Partições completas já existentes contam para a cota mensal, evitando reprocessar o mês quando o
+limite foi atingido.
 B11 usa bilinear de 20 m para 10 m, enquanto SCL usa vizinho mais próximo. Classes SCL 4–7 são
 válidas e 8–10 são nuvens. NDVI/NDMI são agregados por `grid_id` com média e percentis aproximados
 por histograma de 400 classes. Cada item constitui uma partição idempotente e nenhum raster
 intermediário é materializado.
 Reflectâncias não positivas depois da escala e offset L2A são excluídas dos dois índices.
+O índice espacial de células candidatas é pré-calculado uma vez por `tile_id` em cada execução,
+evitando repetir a transformação de toda a grade para cada cena. A leitura das cenas pode usar até
+dois workers locais, enquanto os artefatos continuam sendo gravados de forma serializada e atômica.
 
 ### MapBiomas
 

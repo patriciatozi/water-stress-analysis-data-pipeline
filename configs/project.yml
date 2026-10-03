@@ -53,6 +53,8 @@ sentinel_2:
   collection: sentinel-2-l2a
   max_cloud_cover: 30
   representative_scenes: 3
+  max_tiles_per_month: 10
+  max_workers: 2
   page_limit: 100
   assets:
     - red

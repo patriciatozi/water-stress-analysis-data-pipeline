@@ -105,6 +105,8 @@ Arquivo: `configs/project.yml`.
 | Idade máxima Sentinel-2 | 30 dias | Limite para reutilizar a observação mais recente no Gold |
 | Classe de soja | `39` | MapBiomas |
 | Nuvem máxima | 30% | Busca Sentinel-2 |
+| Tiles Sentinel-2 por mês | `10` | Limite padrão de cenas mensais na Silver |
+| Workers Sentinel-2 | `2` | Concorrência local limitada para leitura das cenas |
 
 O arquivo `src/water_stress/config.py` carrega o YAML com Pydantic e valida:
 
@@ -448,9 +450,16 @@ P10, P50 e P90 são aproximados por histograma de 400 classes entre -1 e 1. A pr
 0,005 e reduz o uso de memória.
 
 O padrão seleciona a cena de menor nebulosidade para cada combinação de ano, mês e tile, cobrindo
-todo o período configurado. `--max-items` limita o lote da execução e `--item-id` escolhe cenas
-explicitamente. `--coverage all` desativa a seleção mensal e processa todos os itens do catálogo.
+todo o período configurado, e mantém no máximo 15 tiles por mês. A seleção prioriza a maior
+quantidade estimada de células de soja cobertas pelo footprint; `--tiles-per-month` permite ajustar
+esse limite, `--max-items` limita o lote total da execução e `--item-id` escolhe cenas explicitamente.
+`--coverage all` desativa a seleção mensal e processa todos os itens do catálogo. O limite é
+cumulativo por mês: partições completas existentes contam para a cota, e meses completos são
+ignorados em reexecuções.
 Partições existentes e legíveis são reutilizadas. Nenhum raster intermediário é persistido.
+O índice das células candidatas é montado uma vez por `tile_id` e reutilizado nas cenas do mesmo
+tile. O processamento usa no máximo dois workers por padrão; `--workers` ajusta esse limite, e a
+persistência dos artefatos permanece serializada para preservar escritas atômicas.
 
 Podem existir vários itens na mesma data e tile. A regra de mosaico ou prioridade deve ser definida
 antes da Gold.
@@ -532,7 +541,9 @@ Transformação:
 --source       produto Silver
 --config       seleciona outro YAML
 --item-id      item Sentinel-2; pode ser repetido
---max-items    limite opcional do lote Sentinel-2
+--max-items    limite opcional do lote total Sentinel-2
+--tiles-per-month  máximo de tiles selecionados por mês (15 por padrão)
+--workers      máximo de processadores concorrentes (2 por padrão)
 --coverage     monthly (padrão) ou all
 ```
 

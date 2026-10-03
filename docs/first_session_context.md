@@ -166,8 +166,12 @@ uv run python -m water_stress.pipelines.run_transformation --source weather-dail
 - Percentis aproximados por histograma de 400 classes entre -1 e 1.
 - Blocos de 512 × 512 pixels, sem raster intermediário persistido.
 - Partição incremental e idempotente por item.
-- O padrão seleciona a cena de menor nebulosidade por mês e tile em todo o período; `--max-items`
-  limita o lote da execução e `--coverage all` processa todos os itens do catálogo.
+- O padrão mantém uma cena por mês e tile, prioriza tiles com maior quantidade estimada de células
+  de soja cobertas e limita a 10 tiles por mês; `--tiles-per-month` ajusta esse limite,
+  `--max-items` limita o lote da execução e `--coverage all` processa todos os itens do catálogo.
+  A cota mensal considera partições completas já existentes e pula meses que já atingiram o limite.
+  O índice das células de soja é pré-calculado por tile e a transformação usa até dois workers locais;
+  a escrita permanece serializada.
 
 Smoke tests reais:
 
@@ -180,6 +184,8 @@ Smoke tests reais:
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --max-items 5
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --tiles-per-month 10 --max-items 30
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --coverage all --max-items 20
 uv run python -m water_stress.pipelines.run_transformation \
