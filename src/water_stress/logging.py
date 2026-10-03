@@ -14,7 +14,16 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("source", "event", "path", "attempt"):
+        for key in (
+            "source",
+            "event",
+            "path",
+            "attempt",
+            "operation",
+            "partition",
+            "outcome",
+            "row_count",
+        ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         if record.exc_info:

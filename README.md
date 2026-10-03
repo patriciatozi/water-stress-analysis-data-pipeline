@@ -653,3 +653,9 @@ O código-fonte está sob a [MIT License](LICENSE). Os conjuntos de dados não s
 - [NASA POWER](https://power.larc.nasa.gov/docs/services/api/temporal/daily/);
 - [ISRIC SoilGrids WCS](https://docs.isric.org/globaldata/soilgrids/wcs.html);
 - [Element 84 Earth Search](https://earth-search.aws.element84.com/v1).
+
+## Automação com Airflow
+
+O [guia de Airflow](docs/airflow.md) descreve a execução local via Docker Compose, com modos
+`full`, `satellite-gold` e `gold-only`, validação Gold e carga opcional no PostgreSQL/PostGIS.
+O DAG é manual para a safra histórica e mantém regras de negócio nos pipelines existentes.

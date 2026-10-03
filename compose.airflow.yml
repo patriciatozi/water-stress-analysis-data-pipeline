@@ -1,0 +1,63 @@
+name: water-stress-airflow
+
+services:
+  metadata-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_METADATA_PASSWORD:?Configure AIRFLOW_METADATA_PASSWORD in .env.airflow}
+    volumes:
+      - airflow-metadata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow:
+    build:
+      context: .
+      dockerfile: deployment/airflow/Dockerfile
+    command: standalone
+    working_dir: /opt/project
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADATA_PASSWORD:?Configure AIRFLOW_METADATA_PASSWORD}@metadata-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "1"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+      AIRFLOW__CORE__DAG_RUN_CONF_OVERRIDES_PARAMS: "true"
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+      WATER_STRESS_DATABASE__HOST: ${AIRFLOW_PIPELINE_DATABASE_HOST:-host.docker.internal}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - airflow-state:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - ./configs:/opt/project/configs:ro
+      - ./migrations:/opt/project/migrations:ro
+      - ./data:/opt/project/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://localhost:8974/health]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+volumes:
+  airflow-metadata:
+  airflow-state:

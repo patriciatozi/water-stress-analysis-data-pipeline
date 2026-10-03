@@ -222,3 +222,7 @@ data/**
 !data/.gitkeep
 !data/bronze/
 !data/bronze/.gitkeep
+
+# Local Airflow credentials and generated state
+.env.airflow
+.airflow/

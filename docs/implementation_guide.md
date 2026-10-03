@@ -656,3 +656,11 @@ SELECT grid_id, centroid_latitude, centroid_longitude,
 FROM gold.water_stress_dashboard
 WHERE week_start = DATE '2023-09-04';
 ```
+
+## Orquestração Airflow
+
+`dags/water_stress_pipeline.py` coordena os CLIs existentes em três modos: execução completa,
+Sentinel-2 + Gold e somente Gold. O gate `pipelines/run_quality.py` impede publicação de Gold
+vazia, relatório inválido ou qualidade `failed`, permitindo `warning` documentado. A carga no banco
+é opcional e segue migrations → manifestos → datasets em ordem de dependência.
+Instalação, comandos e limites operacionais: [guia Airflow](airflow.md).

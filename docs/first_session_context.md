@@ -376,3 +376,21 @@ observado [0, 1]. Qualidade global `warning` por valores ausentes nos atributos 
 102 testes passaram, cobertura 85,30%, Ruff, formatação e mypy aprovados. A fixture de testes
 agora isola também a raiz Gold em diretório temporário. A migration 002 ainda não foi aplicada
 a uma instância PostgreSQL nesta sessão. Nenhum commit ou push foi realizado.
+
+## Orquestração Airflow — atualização 2026-10-03
+
+- `compose.airflow.yml` prepara Airflow 3.2.2/Python 3.12 em Docker Compose local, com
+  LocalExecutor e PostgreSQL exclusivo para metadados; PostGIS existente continua separado.
+- `dags/water_stress_pipeline.py` possui modos `full`, `satellite-gold` e `gold-only` (padrão),
+  com publicação no banco opcional. O período permanece o configurado no YAML, sem avanço automático.
+- O DAG começa pausado e manual, com uma execução/tarefa por vez. Não recebe `--force`.
+- O gate `run_quality` bloqueia Gold vazia, relatório inválido ou qualidade `failed`;
+  `warning` documentado permite publicação.
+- Logs estruturados preservam operação, partição, resultado e contagem; transformação configura
+  o logger na entrada CLI, sem alterações nas regras de negócio.
+- 110 testes padrão aprovados, cobertura 85,73%, Ruff/formatação/mypy aprovados; 10 testes do DAG
+  aprovados em ambiente temporário com Airflow real, incluindo serialização. Compose passou
+  em `config --quiet`. A suíte padrão pula os testes do DAG quando Airflow não está instalado.
+- Build e inicialização Docker ainda não executados: o daemon local estava desligado.
+- Instalação, autenticação, disparo, recuperação e limites estão em `docs/airflow.md`.
+- Não houve processamento de dados nem carga no PostGIS nesta etapa; nenhum commit/push.

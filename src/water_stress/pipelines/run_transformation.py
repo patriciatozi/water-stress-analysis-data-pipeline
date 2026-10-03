@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from water_stress.config import load_settings
+from water_stress.logging import configure_logging
 from water_stress.transformation import (
     crop_mask,
     gold_weekly,
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_logging()
     settings = load_settings(args.config)
     if args.source == "satellite-observation":
         satellite_results = satellite_observation.transform(
