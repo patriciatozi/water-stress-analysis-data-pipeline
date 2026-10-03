@@ -71,6 +71,35 @@ def test_selects_explicit_or_limited_catalog_items() -> None:
         satellite_observation.select_items([first], item_ids={"missing"}, max_items=1)
 
 
+def test_selects_lowest_cloud_scene_for_each_month_and_tile() -> None:
+    september = _item("S2B_21LWG_20230901_0_L2A")
+    september["properties"] = {
+        "datetime": "2023-09-01T14:00:00Z",
+        "eo:cloud_cover": 20.0,
+    }
+    september_clearer = _item("S2B_21LWG_20230915_0_L2A")
+    september_clearer["properties"] = {
+        "datetime": "2023-09-15T14:00:00Z",
+        "eo:cloud_cover": 5.0,
+    }
+    october = _item("S2B_21LWG_20231001_0_L2A")
+    october["properties"] = {
+        "datetime": "2023-10-01T14:00:00Z",
+        "eo:cloud_cover": 10.0,
+    }
+
+    selected = satellite_observation.select_items(
+        [september, october, september_clearer],
+        item_ids=None,
+        max_items=None,
+    )
+
+    assert [str(item["id"]) for item in selected] == [
+        "S2B_21LWG_20230915_0_L2A",
+        "S2B_21LWG_20231001_0_L2A",
+    ]
+
+
 def test_rejects_nonpositive_reflectance_after_l2a_offset() -> None:
     accumulators = satellite_observation._empty_accumulators(1)
     satellite_observation._accumulate(

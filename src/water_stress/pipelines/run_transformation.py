@@ -34,7 +34,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="nasa-power",
     )
     parser.add_argument("--item-id", action="append", help="Sentinel-2 STAC item ID")
-    parser.add_argument("--max-items", type=int, default=1, help="Maximum Sentinel-2 items per run")
+    parser.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        help="Optional maximum Sentinel-2 items per run",
+    )
+    parser.add_argument(
+        "--coverage",
+        choices=("monthly", "all"),
+        default="monthly",
+        help="Sentinel-2 selection: one lowest-cloud scene per month/tile or all catalog items",
+    )
     return parser
 
 
@@ -46,6 +57,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings,
             item_ids=set(args.item_id) if args.item_id else None,
             max_items=args.max_items,
+            coverage=args.coverage,
         )
         print(
             json.dumps(

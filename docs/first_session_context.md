@@ -166,7 +166,8 @@ uv run python -m water_stress.pipelines.run_transformation --source weather-dail
 - Percentis aproximados por histograma de 400 classes entre -1 e 1.
 - Blocos de 512 × 512 pixels, sem raster intermediário persistido.
 - Partição incremental e idempotente por item.
-- O padrão processa a próxima cena pendente; `--max-items` controla o lote.
+- O padrão seleciona a cena de menor nebulosidade por mês e tile em todo o período; `--max-items`
+  limita o lote da execução e `--coverage all` processa todos os itens do catálogo.
 
 Smoke tests reais:
 
@@ -179,6 +180,8 @@ Smoke tests reais:
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --max-items 5
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --coverage all --max-items 20
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --item-id S2A_21LWG_20230926_0_L2A
 ```
@@ -253,8 +256,8 @@ Fontes individuais de ingestão: `ibge`, `nasa-power`, `soilgrids`, `sentinel-2`
 
 Após `satellite_observation`:
 
-- 71 testes aprovados;
-- cobertura total de 85,78%;
+- 92 testes aprovados;
+- cobertura total de 85,98%;
 - Ruff e formatação aprovados;
 - mypy estrito aprovado;
 - smoke tests reais de todas as tabelas Silver estaduais;
@@ -263,8 +266,9 @@ Após `satellite_observation`:
 ## Limitações e decisões abertas
 
 - O catálogo Sentinel-2 possui 3.128 itens e deve continuar incremental e monitorado.
-- Podem existir múltiplos itens STAC para a mesma data e tile. A Gold deverá definir mosaico ou
-  prioridade antes de criar uma observação temporal única por célula.
+- Podem existir múltiplos itens STAC para a mesma data e tile. A Gold usa a observação mais recente
+  anterior ao fim da semana, limitada por `satellite_max_age_days=30`; mosaico ou prioridade entre
+  itens da mesma data e tile ainda deve ser definido.
 - Percentis Sentinel-2 são aproximações por histograma, com resolução de 0,005.
 - A ETo usa umidade relativa média porque RH mínima/máxima não são ingeridas.
 - INMET segue fora do escopo e poderá validar a meteorologia posteriormente.
@@ -295,7 +299,9 @@ Após `satellite_observation`:
 | `ddc5190` | Silver `weather_daily` e ETo |
 | `065af5d` | Silver `satellite_observation` |
 
-Estado desta atualização: `main` sincronizada com `origin/main` no commit `065af5d`.
+Estado desta atualização: seleção mensal Sentinel-2, janela temporal Gold e documentação de
+persistência foram atualizadas localmente. As alterações desta atualização ainda não foram
+commitadas nem enviadas ao remoto.
 
 ## Prompt para continuar no ChatGPT Web
 
@@ -306,8 +312,9 @@ docs/data_architecture.md.
 
 O MVP atual cobre Mato Grosso (state_code=51) de 01/09/2023 a 30/04/2024. A Bronze de IBGE,
 NASA POWER regional, SoilGrids, Sentinel-2 L2A e MapBiomas está implementada. A Silver estadual
-possui dim_spatial_grid, crop_mask, soil_features, weather_daily e satellite_observation. A próxima
-etapa recomendada é definir a Gold semanal e a regra de mosaico/prioridade Sentinel-2.
+possui dim_spatial_grid, crop_mask, soil_features, weather_daily e satellite_observation. A Gold
+semanal, a persistência PostgreSQL/PostGIS e a seleção mensal de cenas Sentinel-2 estão implementadas;
+as próximas decisões são o mosaico/prioridade entre cenas concorrentes e a evolução do armazenamento.
 
 Antes de sugerir alterações, confirme o estado descrito nesta memória. Não presuma que dados locais
 estejam versionados. Não faça commit nem push sem minha autorização explícita.

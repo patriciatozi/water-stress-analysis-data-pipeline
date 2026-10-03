@@ -236,26 +236,43 @@ def _nearest_weather_cells(grid: pa.Table, weather: pa.Table) -> dict[str, str]:
     return result
 
 
-def _satellite_by_week(table: pa.Table) -> dict[tuple[str, date], dict[str, Any]]:
-    grouped: dict[tuple[str, date], list[dict[str, Any]]] = defaultdict(list)
+def _satellite_by_grid(table: pa.Table) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     columns = {name: table[name].to_pylist() for name in table.column_names}
     for index, observation_date in enumerate(columns["date"]):
         if isinstance(observation_date, date):
-            grouped[(str(columns["grid_id"][index]), _week_start(observation_date))].append(
+            grouped[str(columns["grid_id"][index])].append(
                 {name: values[index] for name, values in columns.items()}
             )
-    result: dict[tuple[str, date], dict[str, Any]] = {}
-    for key, rows in grouped.items():
-        dates = sorted(row["date"] for row in rows if isinstance(row["date"], date))
-        result[key] = {
-            "ndvi_median": _median(rows, "ndvi_mean"),
-            "ndmi_median": _median(rows, "ndmi_mean"),
-            "satellite_scene_count": len(rows),
-            "satellite_valid_pixel_pct": _mean(rows, "valid_pixel_pct"),
-            "satellite_cloud_pixel_pct": _mean(rows, "cloud_pixel_pct"),
-            "satellite_observation_date": dates[-1] if dates else None,
-        }
-    return result
+    return grouped
+
+
+def _satellite_for_week(
+    observations: dict[str, list[dict[str, Any]]],
+    *,
+    grid_id: str,
+    week_end: date,
+    max_age_days: int,
+) -> dict[str, Any]:
+    candidates = [
+        row
+        for row in observations.get(grid_id, [])
+        if isinstance(row["date"], date)
+        and row["date"] <= week_end
+        and (week_end - row["date"]).days <= max_age_days
+    ]
+    if not candidates:
+        return {}
+    latest_date = max(row["date"] for row in candidates)
+    rows = [row for row in candidates if row["date"] == latest_date]
+    return {
+        "ndvi_median": _median(rows, "ndvi_mean"),
+        "ndmi_median": _median(rows, "ndmi_mean"),
+        "satellite_scene_count": len(rows),
+        "satellite_valid_pixel_pct": _mean(rows, "valid_pixel_pct"),
+        "satellite_cloud_pixel_pct": _mean(rows, "cloud_pixel_pct"),
+        "satellite_observation_date": latest_date,
+    }
 
 
 def _median(rows: Iterable[dict[str, Any]], column: str) -> float | None:
@@ -333,14 +350,19 @@ def build_weekly_table(
     }
     weather_by_key = _weather_by_week(weather)
     weather_ids = _nearest_weather_cells(grid, weather)
-    satellite_by_key = _satellite_by_week(satellite) if satellite is not None else {}
+    satellite_by_grid = _satellite_by_grid(satellite) if satellite is not None else {}
     week_start, week_end = week
     columns: dict[str, list[Any]] = {name: [] for name in gold_schema(settings).names}
     grid_ids = [str(value) for value in grid["grid_id"].to_pylist() if str(value) in crop_by_grid]
     for grid_id in grid_ids:
         weather_key = (weather_ids[grid_id], week_start)
         weather_values = weather_by_key.get(weather_key, {})
-        satellite_values = satellite_by_key.get((grid_id, week_start), {})
+        satellite_values = _satellite_for_week(
+            satellite_by_grid,
+            grid_id=grid_id,
+            week_end=week_end,
+            max_age_days=settings.gold.satellite_max_age_days,
+        )
         soil_values = soil_by_grid.get(grid_id, {})
         values: dict[str, Any] = {
             "grid_id": grid_id,

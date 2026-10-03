@@ -355,30 +355,37 @@ data/silver/satellite_observation/state_code=51/
     └── _quality.json
 ```
 
-Por segurança, o padrão processa apenas a próxima cena ainda não materializada:
+O padrão seleciona uma cena de menor nebulosidade por mês e tile ao longo de todo o período de
+estudo. Isso evita que a Silver fique restrita ao primeiro mês, mantendo o processamento
+incremental e o custo controlado:
 
 ```bash
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
 ```
 
-Processar um item específico ou um lote controlado:
+Processar um item específico, um lote mensal controlado ou todo o catálogo:
 
 ```bash
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --item-id S2B_21MVM_20230901_0_L2A
 uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --max-items 5
+uv run python -m water_stress.pipelines.run_transformation \
+  --source satellite-observation --coverage all --max-items 20
 ```
 
 A leitura usa COGs remotos quando os ativos não existem localmente. Reexecuções de itens concluídos
-reutilizam o Parquet existente.
+reutilizam o Parquet existente. `--max-items` limita apenas o lote da execução; `--coverage monthly`
+é o padrão e `--coverage all` processa todos os itens do catálogo.
 
 ### Gold semanal de features
 
 A transformação `gold-weekly` cria uma linha por `grid_id` e semana iniciada na segunda-feira.
 Somente células com `soy_fraction >= 0.25` entram na saída. A primeira versão calcula precipitação,
 ETo, balanço hídrico, déficit, dias chuvosos, sequência seca, temperatura, solo e atributos de
-soja. Observações Sentinel-2 são agregadas quando disponíveis; semanas sem cenas permanecem nulas.
+soja. Observações Sentinel-2 são agregadas quando disponíveis. O Gold usa a observação mais recente
+anterior ao fim da semana, sem olhar para o futuro, desde que a idade não ultrapasse
+`gold.satellite_max_age_days` (30 dias por padrão); semanas sem observação válida permanecem nulas.
 
 ```text
 data/gold/water_stress_weekly/state_code=51/
@@ -569,8 +576,8 @@ uv run mypy src tests
 
 Última validação local desta etapa:
 
-- 80 testes aprovados;
-- cobertura total superior a 85%;
+- 92 testes aprovados;
+- cobertura total de 85,98%;
 - Ruff aprovado;
 - mypy em modo estrito aprovado;
 - smoke test real do SoilGrids aprovado;
@@ -584,8 +591,9 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 - A Bronze preserva os dados de origem; recortes exatos, conversão de unidades e padronização pertencem à Silver.
 - SoilGrids usa WCS porque a API REST beta está indisponível.
 - O recorte SoilGrids atual usa o bounding box municipal; a máscara pela geometria exata será aplicada depois.
-- O catálogo Sentinel-2 é persistido por padrão; COGs são processados incrementalmente quando
-  selecionados. Máscara SCL, escala/offset, reprojeção, NDVI e NDMI são calculados na Silver.
+- O catálogo Sentinel-2 é persistido por padrão; COGs são processados incrementalmente por uma
+  seleção mensal de menor nebulosidade ou, explicitamente, por todo o catálogo. Máscara SCL,
+  escala/offset, reprojeção, NDVI e NDMI são calculados na Silver.
 - O raster MapBiomas Bronze cobre todo o Brasil e preserva todas as classes. O recorte municipal e
   a máscara binária da classe 39 pertencem à futura Silver geoespacial.
 - A NASA POWER estadual usa células regionais; a comparação com estações INMET permanece fora do

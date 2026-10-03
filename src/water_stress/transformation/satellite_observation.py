@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import pyarrow as pa
@@ -127,6 +127,21 @@ def _tile_id(item: dict[str, Any]) -> str:
     raise ValueError(f"Cannot determine MGRS tile for item {item.get('id')}")
 
 
+def _item_datetime(item: dict[str, Any]) -> datetime:
+    value = item.get("properties", {}).get("datetime")
+    if not isinstance(value, str):
+        raise ValueError(f"Sentinel-2 item {item.get('id')} has no valid datetime")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _cloud_cover(item: dict[str, Any]) -> float:
+    value = item.get("properties", {}).get("eo:cloud_cover")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("inf")
+
+
 def _asset_href(settings: Settings, item: dict[str, Any], asset_name: str) -> str:
     local = sentinel_2.asset_path(settings, str(item["id"]), asset_name)
     if local.is_file():
@@ -164,18 +179,40 @@ def _load_soy_grid(settings: Settings) -> tuple[list[str], list[BaseGeometry]]:
 
 
 def select_items(
-    items: list[dict[str, Any]], *, item_ids: set[str] | None, max_items: int
+    items: list[dict[str, Any]],
+    *,
+    item_ids: set[str] | None,
+    max_items: int | None,
+    coverage: Literal["monthly", "all"] = "monthly",
 ) -> list[dict[str, Any]]:
-    ordered = sorted(items, key=lambda item: (item["properties"]["datetime"], item["id"]))
+    ordered = sorted(items, key=lambda item: (_item_datetime(item), str(item["id"])))
     if item_ids:
         selected = [item for item in ordered if item.get("id") in item_ids]
         missing = item_ids - {str(item["id"]) for item in selected}
         if missing:
             raise ValueError(f"Sentinel-2 item IDs not found in catalog: {sorted(missing)}")
         return selected
-    if max_items < 1:
+    if coverage == "monthly":
+        representatives: dict[tuple[int, int, str], dict[str, Any]] = {}
+        for item in ordered:
+            acquired = _item_datetime(item)
+            key = (acquired.year, acquired.month, _tile_id(item))
+            current = representatives.get(key)
+            if current is None or (_cloud_cover(item), _item_datetime(item), str(item["id"])) < (
+                _cloud_cover(current),
+                _item_datetime(current),
+                str(current["id"]),
+            ):
+                representatives[key] = item
+        ordered = sorted(
+            representatives.values(),
+            key=lambda item: (_item_datetime(item), _tile_id(item), str(item["id"])),
+        )
+    elif coverage != "all":
+        raise ValueError(f"Unsupported Sentinel-2 coverage mode: {coverage}")
+    if max_items is not None and max_items < 1:
         raise ValueError("max_items must be at least one")
-    return ordered[:max_items]
+    return ordered if max_items is None else ordered[:max_items]
 
 
 def item_output_path(settings: Settings, item: dict[str, Any]) -> Path:
@@ -489,15 +526,23 @@ def write_item(
 
 
 def transform(
-    settings: Settings, *, item_ids: set[str] | None = None, max_items: int = 1
+    settings: Settings,
+    *,
+    item_ids: set[str] | None = None,
+    max_items: int | None = None,
+    coverage: Literal["monthly", "all"] = "monthly",
 ) -> list[SatelliteObservationResult]:
     items, catalog_manifest = _catalog(settings)
-    if item_ids:
-        selected = select_items(items, item_ids=item_ids, max_items=max_items)
-    else:
-        ordered = select_items(items, item_ids=None, max_items=len(items))
-        pending = [item for item in ordered if not item_output_path(settings, item).is_file()]
-        selected = pending[:max_items] if pending else ordered[:max_items]
+    selected_candidates = select_items(
+        items,
+        item_ids=item_ids,
+        max_items=None,
+        coverage=coverage,
+    )
+    pending = [
+        item for item in selected_candidates if not item_output_path(settings, item).is_file()
+    ]
+    selected = pending if max_items is None else pending[:max_items]
     grid_ids, grid_geometries = _load_soy_grid(settings)
     results: list[SatelliteObservationResult] = []
     for item in selected:

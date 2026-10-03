@@ -116,6 +116,93 @@ def test_includes_optional_satellite_weekly_summary(settings: Settings) -> None:
     assert table["score_component_count"].to_pylist() == [3]
 
 
+def test_uses_latest_satellite_observation_within_configured_age(settings: Settings) -> None:
+    grid = pa.table(
+        {"grid_id": ["soy-cell"], "centroid_latitude": [0.01], "centroid_longitude": [0.01]}
+    )
+    crop = pa.table({"grid_id": ["soy-cell"], "soy_fraction": [0.5]})
+    soil = pa.table(
+        {
+            "grid_id": ["soy-cell"],
+            "clay_pct": [30.0],
+            "sand_pct": [40.0],
+            "soc": [12.0],
+            "bulk_density": [1.2],
+        }
+    )
+    satellite = pa.table(
+        {
+            "grid_id": ["soy-cell"],
+            "date": [date(2023, 9, 2)],
+            "ndvi_mean": [0.7],
+            "ndmi_mean": [0.2],
+            "valid_pixel_pct": [90.0],
+            "cloud_pixel_pct": [5.0],
+        }
+    )
+
+    table = gold_weekly.build_weekly_table(
+        settings,
+        grid=grid,
+        crop=crop,
+        soil=soil,
+        weather=_weather_table(),
+        satellite=satellite,
+        week=(date(2023, 9, 11), date(2023, 9, 17)),
+    )
+
+    assert table["ndvi_median"].to_pylist() == [0.7]
+    assert table["satellite_observation_date"].to_pylist() == [date(2023, 9, 2)]
+    assert table["satellite_age_days"].to_pylist() == [15]
+
+
+def test_does_not_use_satellite_observation_older_than_configured_age(
+    settings: Settings,
+) -> None:
+    settings = settings.model_copy(
+        update={
+            "gold": settings.gold.model_copy(update={"satellite_max_age_days": 7}),
+        }
+    )
+    grid = pa.table(
+        {"grid_id": ["soy-cell"], "centroid_latitude": [0.01], "centroid_longitude": [0.01]}
+    )
+    crop = pa.table({"grid_id": ["soy-cell"], "soy_fraction": [0.5]})
+    soil = pa.table(
+        {
+            "grid_id": ["soy-cell"],
+            "clay_pct": [30.0],
+            "sand_pct": [40.0],
+            "soc": [12.0],
+            "bulk_density": [1.2],
+        }
+    )
+    satellite = pa.table(
+        {
+            "grid_id": ["soy-cell"],
+            "date": [date(2023, 9, 2)],
+            "ndvi_mean": [0.7],
+            "ndmi_mean": [0.2],
+            "valid_pixel_pct": [90.0],
+            "cloud_pixel_pct": [5.0],
+        }
+    )
+
+    table = gold_weekly.build_weekly_table(
+        settings,
+        grid=grid,
+        crop=crop,
+        soil=soil,
+        weather=_weather_table(),
+        satellite=satellite,
+        week=(date(2023, 9, 11), date(2023, 9, 17)),
+    )
+
+    assert table["ndvi_median"].to_pylist() == [None]
+    assert table["satellite_observation_date"].to_pylist() == [None]
+    assert table["satellite_age_days"].to_pylist() == [None]
+
+
 def test_writes_partitioned_gold_dataset(settings: Settings) -> None:
     common.write_parquet(
         spatial_grid.dataset_path(settings) / "grid.parquet",

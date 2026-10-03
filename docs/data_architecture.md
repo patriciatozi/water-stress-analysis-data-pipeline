@@ -168,11 +168,13 @@ Silver deverá:
 7. descartar intermediários de alta resolução.
 
 A tabela `satellite_observation` implementa esse fluxo incrementalmente por item STAC. A seleção
-inicial usa células com `soy_fraction > 0`; a máscara final usa diretamente a classe 39 MapBiomas
-reamostrada por vizinho mais próximo para 10 m. B11 usa bilinear de 20 m para 10 m, enquanto SCL
-usa vizinho mais próximo. Classes SCL 4–7 são válidas e 8–10 são nuvens. NDVI/NDMI são agregados
-por `grid_id` com média e percentis aproximados por histograma de 400 classes. Cada item constitui
-uma partição idempotente e nenhum raster intermediário é materializado.
+inicial usa uma cena de menor nebulosidade por combinação de ano, mês e tile; `--coverage all`
+permite processar explicitamente todo o catálogo. A seleção usa células com `soy_fraction > 0`; a
+máscara final usa diretamente a classe 39 MapBiomas reamostrada por vizinho mais próximo para 10 m.
+B11 usa bilinear de 20 m para 10 m, enquanto SCL usa vizinho mais próximo. Classes SCL 4–7 são
+válidas e 8–10 são nuvens. NDVI/NDMI são agregados por `grid_id` com média e percentis aproximados
+por histograma de 400 classes. Cada item constitui uma partição idempotente e nenhum raster
+intermediário é materializado.
 Reflectâncias não positivas depois da escala e offset L2A são excluídas dos dois índices.
 
 ### MapBiomas

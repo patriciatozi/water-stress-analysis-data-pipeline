@@ -102,7 +102,7 @@ Arquivo: `configs/project.yml`.
 | Grade detalhada | 250 m | Uso futuro em hotspots |
 | Janela analítica | 7 dias | Gold semanal com início na segunda-feira |
 | Filtro de soja | `0.25` | Mínimo configurável de `soy_fraction` |
-| Idade máxima Sentinel-2 | 30 dias | Flag de qualidade futura para observações antigas |
+| Idade máxima Sentinel-2 | 30 dias | Limite para reutilizar a observação mais recente no Gold |
 | Classe de soja | `39` | MapBiomas |
 | Nuvem máxima | 30% | Busca Sentinel-2 |
 
@@ -447,7 +447,9 @@ NDMI = (NIR - SWIR16) / (NIR + SWIR16)
 P10, P50 e P90 são aproximados por histograma de 400 classes entre -1 e 1. A precisão é cerca de
 0,005 e reduz o uso de memória.
 
-O padrão processa uma cena pendente. `--max-items` controla o lote e `--item-id` escolhe uma cena.
+O padrão seleciona a cena de menor nebulosidade para cada combinação de ano, mês e tile, cobrindo
+todo o período configurado. `--max-items` limita o lote da execução e `--item-id` escolhe cenas
+explicitamente. `--coverage all` desativa a seleção mensal e processa todos os itens do catálogo.
 Partições existentes e legíveis são reutilizadas. Nenhum raster intermediário é persistido.
 
 Podem existir vários itens na mesma data e tile. A regra de mosaico ou prioridade deve ser definida
@@ -530,7 +532,8 @@ Transformação:
 --source       produto Silver
 --config       seleciona outro YAML
 --item-id      item Sentinel-2; pode ser repetido
---max-items    lote Sentinel-2; padrão 1
+--max-items    limite opcional do lote Sentinel-2
+--coverage     monthly (padrão) ou all
 ```
 
 `--force` não existe nas transformações Silver.
@@ -557,7 +560,7 @@ uv run mypy
 Os testes cobrem configuração, HTTP, retry, erros, checksum, idempotência, geometrias, grade,
 conversões de solo, soja, meteorologia, ETo, SCL, escala, offset, NDVI, NDMI, partições e metadados.
 
-Última validação registrada: 80 testes, cobertura de 86,68%, Ruff e mypy aprovados.
+Última validação registrada: 92 testes, cobertura de 85,98%, Ruff, formatação e mypy aprovados.
 
 ## 12. Notebooks
 
