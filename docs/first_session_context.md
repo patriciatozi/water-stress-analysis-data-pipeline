@@ -26,9 +26,11 @@ constituem prescrição agronômica, previsão operacional ou recomendação de 
 
 - Bronze preserva respostas originais e imutáveis.
 - Silver contém dados padronizados, validados e agregados nas granularidades apropriadas.
-- Gold, ainda não implementada, integrará somente os atributos necessários em janelas temporais.
+- Gold integra os atributos necessários em janelas semanais e mantém score provisório explícito.
 - Dados baixados e produtos em `data/` não são versionados.
 - Cada dataset registra fonte, extração, CRS, resolução, unidades e versão de processamento.
+- PostgreSQL/PostGIS materializa uma projeção relacional opcional: manifestos Bronze, tabelas Silver,
+  Gold e controle de execução. Os arquivos brutos continuam sendo a fonte preservada.
 
 Tabelas atuais:
 
@@ -37,6 +39,17 @@ Tabelas atuais:
 - `soil_features`: atributos estáticos de solo;
 - `weather_daily`: meteorologia diária por célula NASA POWER;
 - `satellite_observation`: índices espectrais por célula, cena e tile.
+- `gold.water_stress_weekly`: features semanais e score provisório.
+
+Persistência relacional:
+
+- `bronze.artifact_manifest`: linhagem dos arquivos Bronze, sem copiar os bytes brutos;
+- `silver.*`: tabelas derivadas com chaves estrangeiras para `dim_spatial_grid`;
+- `gold.water_stress_weekly`: tabela analítica com chave `grid_id + week_start`;
+- `control.schema_migration`, `control.load_run` e `control.dataset_load`: auditoria técnica das
+  migrations e cargas;
+- PostGIS usa `EPSG:5880` para polígonos da grade e `EPSG:4326` para pontos meteorológicos;
+- staging temporário, `COPY`, transação e `ON CONFLICT` tornam a carga idempotente e reiniciável.
 
 Consulte `docs/data_architecture.md` para o modelo lógico detalhado.
 
@@ -170,6 +183,25 @@ uv run python -m water_stress.pipelines.run_transformation \
   --source satellite-observation --item-id S2A_21LWG_20230926_0_L2A
 ```
 
+## Persistência PostgreSQL/PostGIS
+
+O banco fica desabilitado por padrão. Configure `WATER_STRESS_DATABASE__...` em um `.env` local,
+carregue as variáveis na sessão e execute:
+
+```bash
+set -a
+source .env
+set +a
+
+uv run python -m water_stress.pipelines.run_database --migrate
+uv run python -m water_stress.pipelines.run_database --register-bronze
+uv run python -m water_stress.pipelines.run_database --load --dataset all
+```
+
+O PostgreSQL deve ter PostGIS instalado na mesma instância do servidor. O pgAdmin serve para
+registrar a conexão e consultar as tabelas; ele não substitui o pipeline de carga. Uma nova
+instalação ou porta gera um novo cluster, portanto o database precisa existir nessa instância.
+
 ### NASA POWER pontual legado
 
 O transformador `--source nasa-power` do piloto municipal permanece para compatibilidade, mas a
@@ -237,17 +269,17 @@ Após `satellite_observation`:
 - A ETo usa umidade relativa média porque RH mínima/máxima não são ingeridas.
 - INMET segue fora do escopo e poderá validar a meteorologia posteriormente.
 - A grade adaptativa de 250 m para hotspots ainda não foi implementada.
-- A camada Gold ainda não foi implementada.
+- A persistência em S3/ADLS ainda não foi implementada; o contrato `StorageClient` prepara essa
+  evolução para os arquivos e a conexão PostgreSQL permanece uma infraestrutura separada.
 
 ## Próximas etapas recomendadas
 
-1. Definir o contrato Gold e a janela temporal inicial de sete dias.
-2. Definir mosaico/prioridade para itens Sentinel-2 da mesma data e tile.
-3. Relacionar cada `grid_id` à célula `weather_cell_id` correspondente.
-4. Construir features semanais de clima, ETo, chuva, solo, soja, NDVI e NDMI.
-5. Definir balanço hídrico, déficit e score com premissas agronômicas documentadas.
-6. Criar testes espaço-temporais e notebooks de validação Gold.
-7. Avaliar INMET ou outra fonte observacional para validação meteorológica.
+1. Definir mosaico/prioridade para itens Sentinel-2 da mesma data e tile.
+2. Relacionar cada `grid_id` à célula `weather_cell_id` correspondente.
+3. Calibrar o balanço hídrico, déficit e score com premissas agronômicas documentadas.
+4. Criar testes espaço-temporais e notebooks de validação Gold.
+5. Avaliar INMET ou outra fonte observacional para validação meteorológica.
+6. Migrar o armazenamento de arquivos para S3/ADLS sem alterar as regras de negócio.
 
 ## Histórico de commits
 

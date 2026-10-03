@@ -39,6 +39,7 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver `weather_daily` | Implementada e testada | Clima regional e ETo por célula e data |
 | Silver `satellite_observation` | Implementada e testada localmente | NDVI/NDMI por cena e `grid_id` |
 | Camada Gold semanal | Implementada inicialmente e testada | Features climáticas, solo, soja e Sentinel-2 opcionais |
+| Persistência PostgreSQL/PostGIS | Implementada e testada com mocks | Manifestos Bronze e tabelas Silver/Gold relacionais |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
 Os smoke tests anteriores de Sorriso continuam como evidência dos clientes, mas seus artefatos
@@ -411,6 +412,74 @@ Instale as dependências:
 uv sync --all-groups
 ```
 
+### Persistência PostgreSQL/PostGIS
+
+O PostgreSQL/PostGIS é uma projeção relacional opcional dos dados. Os GeoTIFFs, COGs, GeoJSONs e
+demais arquivos originais continuam em `data/bronze/` ou futuramente em object storage. O banco
+recebe os manifestos Bronze, as tabelas Silver/Gold e o controle de execução; não recebe uma cópia
+dos arquivos brutos.
+
+O nome exibido para um servidor no pgAdmin é apenas um rótulo. A conexão real é determinada por
+host, porta, database e usuário. O servidor precisa ter a extensão PostGIS instalada antes da
+migration:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+```
+
+Exemplo de configuração local em `.env` (não versionar):
+
+```env
+WATER_STRESS_DATABASE__ENABLED=true
+WATER_STRESS_DATABASE__HOST=127.0.0.1
+WATER_STRESS_DATABASE__PORT=5433
+WATER_STRESS_DATABASE__NAME=water-stress
+WATER_STRESS_DATABASE__USER=patriciatozi
+WATER_STRESS_DATABASE__PASSWORD="sua_senha"
+```
+
+O valor da porta depende da instalação local. PostgreSQL Homebrew e EnterpriseDB podem usar portas
+distintas. O pipeline usa `5432`/`water_stress` apenas como valores padrão do YAML.
+
+O arquivo `.env` não é carregado automaticamente. Em cada nova sessão do terminal:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Aplique as migrations, registre os manifestos Bronze e carregue todas as tabelas derivadas:
+
+```bash
+uv run python -m water_stress.pipelines.run_database --migrate
+uv run python -m water_stress.pipelines.run_database --register-bronze
+uv run python -m water_stress.pipelines.run_database --load --dataset all
+```
+
+As tabelas ficam nos schemas `bronze`, `silver`, `gold` e `control`. A carga usa tabelas temporárias,
+`COPY`, transação e `ON CONFLICT`, podendo ser repetida com segurança. Para testar uma tabela
+individual:
+
+```bash
+uv run python -m water_stress.pipelines.run_database \
+  --load --dataset weather_daily
+```
+
+O serviço PostgreSQL precisa estar executando antes desses comandos. Credenciais não devem ser
+colocadas em `configs/project.yml` nem versionadas.
+
+Consultas úteis no pgAdmin:
+
+```sql
+SELECT * FROM control.schema_migration;
+SELECT dataset, status, row_count, error_message
+FROM control.load_run
+ORDER BY started_at_utc DESC;
+SELECT COUNT(*) FROM silver.weather_daily;
+SELECT COUNT(*) FROM gold.water_stress_weekly;
+```
+
 ## Como executar
 
 Planejar as saídas sem acessar as fontes ou gravar arquivos:
@@ -522,6 +591,12 @@ Os testes automatizados não dependem da internet: as respostas HTTP e downloads
 - A NASA POWER estadual usa células regionais; a comparação com estações INMET permanece fora do
   escopo atual e poderá ser incorporada na validação futura.
 - O armazenamento atual é local, mas está isolado por `StorageClient` para futura implementação em S3 ou ADLS.
+- PostgreSQL/PostGIS é uma camada de consulta local opcional: Bronze bruto permanece em arquivos,
+  enquanto manifestos, Silver e Gold são materializados relacionalmente.
+- `migrations/001_initial.sql` é a fonte versionada do schema relacional; alterações de contrato
+  devem gerar novas migrations e preservar compatibilidade quando possível.
+- Cargas relacionais usam staging, transação e upsert por chave analítica; falhas não alteram os
+  Parquets de origem.
 - Arquivos em `data/` não devem ser enviados ao GitHub.
 
 ## Próximas etapas sugeridas

@@ -57,3 +57,33 @@ def test_rejects_invalid_mapbiomas_class(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         load_settings(path)
+
+
+def test_load_settings_applies_nested_environment_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "project.yml"
+    config_path.write_text(Path("configs/project.yml").read_text())
+    monkeypatch.setenv("WATER_STRESS_DATABASE__ENABLED", "true")
+    monkeypatch.setenv("WATER_STRESS_DATABASE__PORT", "55432")
+    monkeypatch.setenv("WATER_STRESS_DATABASE__PASSWORD", "from-env")
+
+    loaded = load_settings(config_path)
+
+    assert loaded.database.enabled is True
+    assert loaded.database.port == 55432
+    assert loaded.database.password is not None
+    assert loaded.database.password.get_secret_value() == "from-env"
+
+
+def test_load_settings_preserves_numeric_database_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "project.yml"
+    config_path.write_text(Path("configs/project.yml").read_text())
+    monkeypatch.setenv("WATER_STRESS_DATABASE__PASSWORD", "12345678")
+
+    loaded = load_settings(config_path)
+
+    assert loaded.database.password is not None
+    assert loaded.database.password.get_secret_value() == "12345678"

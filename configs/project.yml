@@ -94,3 +94,13 @@ storage:
   root_path: data/bronze
   silver_root_path: data/silver
   gold_root_path: data/gold
+
+database:
+  enabled: false
+  host: localhost
+  port: 5432
+  name: water_stress
+  user: water_stress_app
+  password: null
+  sslmode: prefer
+  connect_timeout_seconds: 10

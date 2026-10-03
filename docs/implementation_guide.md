@@ -58,6 +58,35 @@ com chave `grid_id + week_start`. A versão inicial integra solo, fração de so
 observações Sentinel-2 quando disponíveis. O score é provisório, configurável e deve ser validado
 agronomicamente antes de uso analítico ou operacional.
 
+### Persistência PostgreSQL/PostGIS
+
+O PostgreSQL/PostGIS é uma projeção relacional opcional dos artefatos locais. A Bronze continua
+imutável em arquivos ou object storage; somente seus manifestos são registrados em
+`bronze.artifact_manifest`. As tabelas derivadas são carregadas nos schemas `silver` e `gold`, e as
+execuções são rastreadas no schema `control`.
+
+| Schema | Responsabilidade |
+|---|---|
+| `bronze` | manifesto, URL, checksum, período e versão da fonte |
+| `silver` | grade, soja, solo, clima e observações Sentinel-2 |
+| `gold` | features semanais para consulta analítica |
+| `control` | migrations, execuções e contagens de carga |
+
+As geometrias usam PostGIS: polígonos da grade em `EPSG:5880` e pontos meteorológicos em
+`EPSG:4326`. O carregador usa tabelas temporárias, `COPY`, transações e `ON CONFLICT`; por isso a
+execução é idempotente e pode ser reiniciada após uma falha.
+
+O banco fica desabilitado por padrão. Para uma execução local, configure as variáveis
+`WATER_STRESS_DATABASE__...` e carregue-as na sessão do terminal:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+O arquivo `.env` não é versionado e não é carregado automaticamente pelo pipeline.
+
 ## 3. Configuração
 
 Arquivo: `configs/project.yml`.
@@ -96,6 +125,8 @@ O arquivo `src/water_stress/config.py` carrega o YAML com Pydantic e valida:
 | `storage.py` | Arquivos locais, checksum e escrita atômica |
 | `logging.py` | Logs estruturados JSON |
 | `models.py` | Resultados e estados das ingestões |
+| `database/client.py` | Conexão e migrations PostgreSQL |
+| `database/loader.py` | Registro Bronze e carga idempotente Silver/Gold |
 
 ### Bronze
 
@@ -124,6 +155,7 @@ Pontos de entrada:
 
 - `pipelines/run_ingestion.py`: executa Bronze;
 - `pipelines/run_transformation.py`: executa Silver e a Gold semanal.
+- `pipelines/run_database.py`: aplica migrations, registra manifestos e carrega Parquet no PostGIS.
 
 ## 5. Componentes compartilhados
 
@@ -446,6 +478,9 @@ Arquivos auxiliares Silver:
 - `_quality.json`: linhas, nulos, duplicidades e intervalos;
 - `_metadata.json`: fonte, CRS, resolução, método e versão.
 
+O PostgreSQL não substitui essa estrutura de arquivos: ele materializa uma cópia consultável das
+tabelas derivadas e dos manifestos, mantendo os artefatos de origem fora do banco.
+
 ## 9. Ordem de execução
 
 ```bash
@@ -463,6 +498,11 @@ uv run python -m water_stress.pipelines.run_transformation --source soil-feature
 uv run python -m water_stress.pipelines.run_transformation --source weather-daily
 uv run python -m water_stress.pipelines.run_transformation --source satellite-observation
 uv run python -m water_stress.pipelines.run_transformation --source gold-weekly
+
+# Persistência relacional opcional
+uv run python -m water_stress.pipelines.run_database --migrate
+uv run python -m water_stress.pipelines.run_database --register-bronze
+uv run python -m water_stress.pipelines.run_database --load --dataset all
 ```
 
 Dependências:
@@ -494,6 +534,16 @@ Transformação:
 ```
 
 `--force` não existe nas transformações Silver.
+
+Persistência:
+
+```text
+--migrate          aplica migrations SQL pendentes
+--register-bronze  registra manifestos sem copiar arquivos brutos
+--load             carrega datasets derivados
+--dataset          dataset individual ou all
+--migration-dir    diretório de migrations; padrão migrations/
+```
 
 ## 11. Testes
 

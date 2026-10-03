@@ -11,6 +11,7 @@ dependencies = [
   "pydantic-settings>=2.4,<3",
   "pyproj>=3.7,<4",
   "pyarrow>=17,<24",
+  "psycopg[binary]>=3.2,<4",
   "pyyaml>=6.0,<7",
   "rasterio>=1.4,<2",
   "shapely>=2.0,<3",

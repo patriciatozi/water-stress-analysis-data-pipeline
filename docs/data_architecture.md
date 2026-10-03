@@ -64,6 +64,49 @@ A Gold une somente os atributos necessários na janela configurada. Geometria, s
 devem ser repetidos diariamente em uma tabela estadual monolítica. A primeira tabela é
 `water_stress_weekly`, particionada por `week_start` e com chave `grid_id + week_start`.
 
+## Persistência relacional PostgreSQL/PostGIS
+
+### Decisão
+
+O PostgreSQL/PostGIS é uma camada de consulta e serving opcional para o ambiente local e para uma
+futura implantação gerenciada. Ele não substitui os arquivos Bronze nem o armazenamento de objetos:
+
+| Camada | Persistência principal | Conteúdo no PostgreSQL |
+|---|---|---|
+| Bronze | arquivos originais ou object storage | manifestos e linhagem em `bronze.artifact_manifest` |
+| Silver | Parquet/GeoParquet/GeoTIFF | tabelas temáticas e geometrias em `silver` |
+| Gold | Parquet particionado e tabela relacional | `gold.water_stress_weekly` |
+| Controle | — | migrations, execuções e cargas em `control` |
+
+Essa separação preserva os bytes originais, mantém o custo de armazenamento sob controle e permite
+trocar o armazenamento local por S3/ADLS ou um PostgreSQL gerenciado sem alterar as regras de
+negócio.
+
+### Contrato de carga
+
+- `migrations/001_initial.sql` cria os schemas, PostGIS, tabelas, chaves, verificações e índices;
+- `dim_spatial_grid` é a dimensão espacial e a tabela pai das referências `grid_id`;
+- `weather_daily` cria a geometria de ponto em `EPSG:4326`;
+- `dim_spatial_grid` mantém polígonos em `EPSG:5880`;
+- cargas usam staging temporário, `COPY`, transação e `ON CONFLICT`;
+- cada dataset registra execução em `control.load_run` e `control.dataset_load`;
+- reexecutar a carga é seguro e não duplica chaves;
+- uma falha de carga não modifica o arquivo Parquet de origem;
+- o pipeline não copia TIFFs, COGs ou GeoJSONs brutos para o banco.
+
+### Operação local
+
+`run_database` recebe host, porta, database e usuário por `WATER_STRESS_DATABASE__...`. O banco
+fica desabilitado por padrão (`enabled=false`) para que ingestões e transformações locais não
+dependam de um servidor ativo. O pgAdmin é somente cliente de administração e visualização; a
+criação e a carga das tabelas são responsabilidades do pipeline.
+
+### Evolução
+
+O schema relacional é uma projeção consultável dos artefatos versionados. Migrações futuras devem
+ser aditivas ou documentar explicitamente uma migração de contrato. O uso em nuvem deve substituir
+somente a conexão e o armazenamento, preservando chaves, partições, manifestos e regras de carga.
+
 ## Decisões implementadas nesta etapa
 
 ### AOI genérica

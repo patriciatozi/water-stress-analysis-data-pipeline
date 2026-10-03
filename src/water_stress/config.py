@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -159,6 +160,17 @@ class StorageSettings(BaseModel):
     gold_root_path: Path = Path("data/gold")
 
 
+class DatabaseSettings(BaseModel):
+    enabled: bool = False
+    host: str = Field(min_length=1)
+    port: int = Field(default=5432, ge=1, le=65535)
+    name: str = Field(min_length=1)
+    user: str = Field(min_length=1)
+    password: SecretStr | None = None
+    sslmode: str = Field(default="prefer", min_length=1)
+    connect_timeout_seconds: int = Field(default=10, gt=0)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="WATER_STRESS_",
@@ -177,6 +189,7 @@ class Settings(BaseSettings):
     gold: GoldSettings
     http: HttpSettings
     storage: StorageSettings
+    database: DatabaseSettings
     config_hash: str = Field(exclude=True)
 
 
@@ -185,5 +198,20 @@ def load_settings(path: Path = Path("configs/project.yml")) -> Settings:
     parsed: Any = yaml.safe_load(raw)
     if not isinstance(parsed, dict):
         raise ValueError(f"Configuration at {path} must be a YAML mapping")
+    for section, values in parsed.items():
+        if not isinstance(values, dict):
+            continue
+        for field_name in values:
+            environment_name = f"WATER_STRESS_{section.upper()}__{field_name.upper()}"
+            raw_value = os.getenv(environment_name)
+            if raw_value is not None:
+                current_value = values[field_name]
+                # Preserve textual environment values. Otherwise a numeric password or
+                # area code would be converted to an integer by YAML before validation.
+                values[field_name] = (
+                    raw_value
+                    if isinstance(current_value, str) or current_value is None
+                    else yaml.safe_load(raw_value)
+                )
     parsed["config_hash"] = hashlib.sha256(raw).hexdigest()
     return Settings.model_validate(parsed)
