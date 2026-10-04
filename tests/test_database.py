@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pyarrow as pa
@@ -8,14 +9,16 @@ import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import box
 
-from water_stress.config import DatabaseSettings
+from water_stress.config import DatabaseSettings, Settings
 from water_stress.database.client import apply_migrations, connect
 from water_stress.database.loader import (
+    DATASET_COLUMNS,
     load_dataset,
     load_dataset_files,
     register_bronze_manifests,
 )
 from water_stress.pipelines.run_database import build_parser
+from water_stress.transformation.gold_weekly import gold_schema
 
 
 class FakeCopy:
@@ -233,3 +236,57 @@ def test_database_cli_parser() -> None:
     assert args.load is True
     assert args.register_bronze is True
     assert args.dataset == ["crop_mask"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_streams_gold_classification_and_accepts_v1_files(
+    settings: Settings, tmp_path: Path, legacy: bool
+) -> None:
+    row = {
+        "grid_id": "soy-cell",
+        "week_start": date(2023, 8, 28),
+        "week_end": date(2023, 9, 3),
+        "water_stress_score": 0.75,
+        "water_stress_class": "high",
+        "water_stress_risk_class": "high",
+        "risk_classification_version": "four-level-v1",
+        "monitoring_guidance": "Priorizar avaliação das condições da área.",
+    }
+    table = pa.Table.from_pylist([row], schema=gold_schema(settings))
+    if legacy:
+        table = table.drop(
+            ["water_stress_risk_class", "risk_classification_version", "monitoring_guidance"]
+        )
+    path = tmp_path / "gold.parquet"
+    pq.write_table(table, path)
+    connection = FakeConnection()
+
+    assert (
+        load_dataset_files(connection, "water_stress_weekly", [path], processing_version="0.1.0")
+        == 1
+    )
+    copied = dict(
+        zip(
+            (*DATASET_COLUMNS["water_stress_weekly"], "processing_version"),
+            connection.cursor_instance.copy_stream.rows[0],
+            strict=True,
+        )
+    )
+    assert copied["water_stress_score"] == 0.75
+    assert copied["water_stress_class"] == "high"
+    for name in ("water_stress_risk_class", "risk_classification_version", "monitoring_guidance"):
+        assert copied[name] == (None if legacy else row[name])
+    assert connection.commits == 1
+
+
+def test_loads_gold_classification_from_in_memory_table(settings: Settings) -> None:
+    table = pa.Table.from_pylist(
+        [{"water_stress_risk_class": "attention", "risk_classification_version": "four-level-v1"}],
+        schema=gold_schema(settings),
+    )
+    connection = FakeConnection()
+    assert load_dataset(connection, "water_stress_weekly", table, processing_version="0.1.0") == 1
+    copied = connection.cursor_instance.copy_stream.rows[0]
+    assert copied[DATASET_COLUMNS["water_stress_weekly"].index("water_stress_risk_class")] == (
+        "attention"
+    )

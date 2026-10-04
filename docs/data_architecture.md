@@ -194,14 +194,14 @@ precoce necessário ao processamento Sentinel-2.
 ## Pendências deliberadas
 
 - grade adaptativa de 250 m em hotspots;
-- score semanal e calibração dos pesos;
+- calibração agronômica do score semanal e dos pesos;
 - composição temporal definitiva do Sentinel-2.
 
 Essas pendências não são marcadas como concluídas porque exigem contratos de qualidade e testes
 geoespaciais próprios. A fundação entregue define as chaves, partições, CRS e limites de
 materialização necessários para implementá-las sem retrabalho arquitetural.
 
-### Contrato de consumo Gold v1
+### Contrato de consumo Gold v2
 
 `gold.water_stress_dashboard` é uma view da Gold semanal com a dimensão espacial, criada
 pela migration `002_gold_consumption.sql`. Oferece score 0–100 derivado do índice 0–1,
@@ -209,3 +209,10 @@ classe, status de disponibilidade, fração de pesos disponíveis, centróide, g
 EPSG:5880 e área equivalente de soja. A chave continua `grid_id + week_start`.
 O índice acadêmico e suas políticas de ausência estão documentados em
 `implementation_guide.md`, seção “Gold de consumo”. A calibração agronômica segue pendente.
+
+A migration `003_risk_classification.sql` acrescenta `water_stress_risk_class`,
+`risk_classification_version` e `monitoring_guidance` à tabela e ao final da view, preservando
+o contrato anterior. A política `four-level-v1` interpreta o índice `academic-index-v1` em quatro
+níveis, independentemente da tecnologia de visualização. Linhas antigas não são reclassificadas
+pela migration; a próxima transformação Gold invalida checkpoints v1 e produz o contrato v2.
+O guia de implementação define os intervalos, orientações e políticas de ausência e migração.

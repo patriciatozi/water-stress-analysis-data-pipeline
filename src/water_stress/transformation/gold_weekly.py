@@ -5,7 +5,7 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from math import isfinite
 from pathlib import Path
@@ -19,6 +19,7 @@ from shapely.geometry import Point
 from shapely.strtree import STRtree
 
 from water_stress.config import Settings
+from water_stress.risk_classification import RISK_CLASSIFICATION_POLICY, classify_score
 from water_stress.transformation import (
     common,
     crop_mask,
@@ -29,6 +30,8 @@ from water_stress.transformation import (
 )
 
 LOGGER = logging.getLogger(__name__)
+GOLD_CONTRACT_VERSION = "gold-consumption-v2"
+SCORE_METHOD_VERSION = "academic-index-v1"
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,24 @@ def gold_schema(settings: Settings) -> pa.Schema:
                 "fraction",
                 "Fraction of configured weight available",
             ),
+            _field(
+                "water_stress_risk_class",
+                pa.string(),
+                "category",
+                "low, attention, high or critical; null when score is unavailable",
+            ),
+            _field(
+                "risk_classification_version",
+                pa.string(),
+                "version",
+                "Version of the four-level interpretation policy, independent of the score method",
+            ),
+            _field(
+                "monitoring_guidance",
+                pa.string(),
+                "text",
+                "Academic monitoring guidance in Portuguese; not an irrigation prescription",
+            ),
         ],
         metadata={
             "source": "Silver thematic datasets",
@@ -124,6 +145,9 @@ def gold_schema(settings: Settings) -> pa.Schema:
             "resolution_meters": str(settings.spatial.screening_grid_meters),
             "processing_version": settings.project.version,
             "temporal_grain": "weekly, Monday start",
+            "contract_version": GOLD_CONTRACT_VERSION,
+            "score_method_version": SCORE_METHOD_VERSION,
+            "risk_classification_version": RISK_CLASSIFICATION_POLICY.version,
         },
     )
 
@@ -458,6 +482,14 @@ def build_weekly_table(
         score, label, component_count = _score(settings, values)
         values["water_stress_score"] = score
         values["water_stress_class"] = label
+        risk_band = classify_score(score)
+        values["water_stress_risk_class"] = risk_band.risk_class.value if risk_band else None
+        values["risk_classification_version"] = RISK_CLASSIFICATION_POLICY.version
+        values["monitoring_guidance"] = (
+            risk_band.monitoring_guidance
+            if risk_band
+            else RISK_CLASSIFICATION_POLICY.missing_score_guidance
+        )
         values["score_component_count"] = component_count
         weights = (
             (settings.gold.deficit_weight, "water_deficit_mm_7d"),
@@ -552,7 +584,9 @@ def transform(settings: Settings) -> GoldWeeklyResult:
                 "inputs": lineage,
                 "gold": settings.gold.model_dump(mode="json"),
                 "study": settings.study.model_dump(mode="json"),
-                "contract": "gold-consumption-v1",
+                "contract": GOLD_CONTRACT_VERSION,
+                "score_method_version": SCORE_METHOD_VERSION,
+                "risk_classification": asdict(RISK_CLASSIFICATION_POLICY),
             },
             sort_keys=True,
         ).encode()
@@ -616,6 +650,14 @@ def transform(settings: Settings) -> GoldWeeklyResult:
         "water_deficit_formula": "max(0, -water_balance_mm_7d)",
         "score_formula": "weighted normalized deficit, NDVI and NDMI stress components",
         "score_status": "academic index v1; agronomic calibration pending",
+        "contract_version": GOLD_CONTRACT_VERSION,
+        "score_method_version": SCORE_METHOD_VERSION,
+        "risk_classification": {
+            **asdict(RISK_CLASSIFICATION_POLICY),
+            "score_scale": [0, 1],
+            "interval_policy": "upper inclusive; lower exclusive except at zero; no rounding",
+            "calibration_status": "provisional; agronomic validation pending",
+        },
         "primary_key": ["grid_id", "week_start"],
         "input_checksums": lineage,
         "input_signature": signature,

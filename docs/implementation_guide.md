@@ -612,7 +612,7 @@ uv run --group notebook jupyter lab notebooks/
 - Sentinel-2 deve continuar incremental até existir estimativa de custo e tempo.
 - Dados locais nunca devem ser adicionados ao Git.
 
-## Gold de consumo — índice acadêmico v1
+## Gold de consumo — índice acadêmico v1, contrato v2
 
 `water_stress_weekly` mantém uma linha por `grid_id + week_start`, para células com
 `soy_fraction >= 0,25`. Semanas começam segunda-feira; extremos usam somente datas do estudo.
@@ -623,7 +623,8 @@ componente do índice; não há modelagem de armazenamento no solo, estágio fen
 - NDVI: `clip((0,7 - NDVI) / 0,7, 0, 1)`; NDMI: `clip((0,2 - NDMI) / 0,2, 0, 1)`.
 - Score: média ponderada dos componentes disponíveis, pesos padrão 0,5 / 0,3 / 0,2.
   Componentes com peso zero são excluídos da contagem. Valores zero são válidos.
-- Classes: `low` abaixo de 1/3, `moderate` de 1/3 a menos de 2/3, `high` a partir de 2/3.
+- Classe legada (`water_stress_class`): `low` abaixo de 1/3, `moderate` de 1/3 a menos de 2/3,
+  `high` a partir de 2/3. Preservada para consumidores do contrato v1.
 - Meteorologia: centro NASA POWER mais próximo em coordenadas geográficas, sem interpolação.
   Essa associação não representa distância métrica. Precipitação e ETo devem existir para
   todos os dias esperados; caso contrário, score e classe são nulos, status `unavailable`.
@@ -631,6 +632,39 @@ componente do índice; não há modelagem de armazenamento no solo, estágio fen
   data usam mediana dos índices médios e média dos percentuais, sem mosaico de pixels.
   Ausência de satélite permite score `partial`; todos os componentes configurados dão `complete`.
   `score_available_weight` informa a fração dos pesos disponíveis, não confiança estatística.
+
+### Classificação em quatro níveis
+
+`water_stress_risk_class` interpreta o mesmo índice pela política `four-level-v1`, implementada
+em `water_stress.risk_classification`, sem alterar fórmula ou pesos. O score é adimensional;
+a escala 0–100 da view é uma transformação de apresentação, não probabilidade de estresse.
+Os limites são provisórios e ainda exigem validação agronômica.
+
+| Score 0–100 | Código | Rótulo | `monitoring_guidance` |
+|---|---|---|---|
+| 0 ≤ score ≤ 25 | `low` | Baixo | Manter monitoramento de rotina. |
+| 25 < score ≤ 50 | `attention` | Atenção | Monitorar a tendência do indicador. |
+| 50 < score ≤ 75 | `high` | Alto | Priorizar avaliação das condições da área. |
+| 75 < score ≤ 100 | `critical` | Crítico | Avaliar as condições da área com urgência. |
+
+A classificação usa o valor original entre 0 e 1, antes de qualquer arredondamento: 25,7 na
+escala visual é `attention`. Zero é válido e corresponde a `low`. Scores não finitos ou fora
+de [0, 1] são rejeitados. Score ausente mantém as duas classes nulas e recebe a orientação
+“Sem dados suficientes para classificar o risco.” A versão da política é registrada também
+nessas linhas, pois a ausência faz parte do contrato; não existe classe de risco `unavailable`.
+
+Campos novos: `water_stress_risk_class` (string nullable), `risk_classification_version`
+(string preenchida nas novas saídas) e `monitoring_guidance` (texto em português preenchido nas
+novas saídas). A chave `grid_id + week_start`, grade, unidades e partições permanecem iguais.
+Schema e metadados registram `gold-consumption-v2`, método `academic-index-v1`, versão da
+classificação, limites, rótulos, orientações e política de intervalos/ausência. A assinatura dos
+checkpoints inclui o contrato e a política completa: outputs v1 e mudanças na classificação
+exigem recálculo; outputs v2 íntegros com os mesmos inputs e política são reutilizados.
+
+O índice ainda usa ETo e chuva total, limites fixos de NDVI/NDMI e três componentes. ETc,
+chuva efetiva, anomalias históricas/fenológicas, retenção hídrica do solo e persistência do estresse
+continuam pendentes de métodos, dados e validação. A sequência de dias sem chuva não mede a
+persistência do estresse. A nova classificação não acrescenta esses sinais ao cálculo.
 
 Saída: Parquet Zstandard por semana, schema, qualidade e metadados com checksums dos inputs.
 Checkpoints por semana reutilizam somente outputs íntegros com os mesmos inputs e parâmetros.
@@ -653,9 +687,33 @@ exibir indisponíveis separadamente e permitir filtrar `score_status`; scores pa
 ter pesos diferentes entre células. Para agregar risco estadual, use média ponderada pela
 área equivalente de soja e publique a cobertura de área com score junto à média.
 
+A migration `003_risk_classification.sql` acrescenta os três campos novos à tabela e ao final
+da view, preservando nomes, ordem e tipos dos campos anteriores e as views dependentes. Não
+reclassifica linhas existentes: os novos campos ficam nulos até regenerar e carregar a Gold.
+O carregador aceita arquivos v1 com os três campos ausentes e grava nulos nesses campos; para
+obter a nova classificação, use arquivos regenerados v2. Recarregar arquivos v1 sobre linhas v2
+também torna esses campos nulos. A migration deve ser aplicada antes de usar o carregador atualizado.
+Os comandos acima aplicam as migrations pendentes e regeneram os arquivos por checkpoint, sem
+alterar a Bronze nem repetir a transformação Silver.
+
+### Consumo pelo dashboard
+
+- Usar `water_stress_risk_class` para a legenda de quatro níveis e `monitoring_guidance` para
+  a orientação; cores, rótulos traduzidos, filtros e arredondamento pertencem à apresentação.
+- Exibir score nulo como “Sem dados suficientes”, separado de risco baixo. Se a versão da
+  classificação for nula, informar “Classificação pendente de atualização”, sem inferir a classe
+  no cliente a partir de dados v1. Classificar não é arredondar o número exibido.
+- Mostrar `score_status`, `score_component_count`, `score_available_weight` e `satellite_age_days`.
+  Permitir separar completos e parciais; `complete` indica componentes disponíveis, não validação
+  agronômica. As orientações são acadêmicas, sem recomendação automática de irrigação.
+- Nas médias estaduais, ponderar pela área equivalente de soja com score disponível e publicar
+  a cobertura de área com score. Distribuições por classe usam a classe de cada célula e sua área;
+  a classe de uma média estadual não substitui a distribuição espacial.
+
 ```sql
 SELECT grid_id, centroid_latitude, centroid_longitude,
-       water_stress_score_pct, water_stress_class, score_status,
+       water_stress_score_pct, water_stress_risk_class, risk_classification_version,
+       monitoring_guidance, score_status, score_component_count,
        score_available_weight, satellite_age_days
 FROM gold.water_stress_dashboard
 WHERE week_start = DATE '2023-09-04';

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
 
 from water_stress.config import Settings
 from water_stress.transformation import (
@@ -71,6 +75,9 @@ def test_builds_weekly_features_only_for_soy_cells(settings: Settings) -> None:
     assert table["consecutive_dry_days"].to_pylist() == [1]
     assert table["water_stress_score"].to_pylist() == [0.5]
     assert table["water_stress_class"].to_pylist() == ["moderate"]
+    assert table["water_stress_risk_class"].to_pylist() == ["attention"]
+    assert table["risk_classification_version"].to_pylist() == ["four-level-v1"]
+    assert table["monitoring_guidance"].to_pylist() == ["Monitorar a tendência do indicador."]
     assert table["score_component_count"].to_pylist() == [1]
 
 
@@ -114,6 +121,9 @@ def test_includes_optional_satellite_weekly_summary(settings: Settings) -> None:
     assert table["satellite_scene_count"].to_pylist() == [1]
     assert table["satellite_age_days"].to_pylist() == [1]
     assert table["score_component_count"].to_pylist() == [3]
+    assert table["score_status"].to_pylist() == ["complete"]
+    assert table["water_stress_score"].to_pylist() == [0.25]
+    assert table["water_stress_risk_class"].to_pylist() == ["low"]
 
 
 def test_uses_latest_satellite_observation_within_configured_age(settings: Settings) -> None:
@@ -203,7 +213,9 @@ def test_does_not_use_satellite_observation_older_than_configured_age(
     assert table["satellite_age_days"].to_pylist() == [None]
 
 
-def test_writes_partitioned_gold_dataset(settings: Settings) -> None:
+def test_writes_partitioned_gold_dataset(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     common.write_parquet(
         spatial_grid.dataset_path(settings) / "grid.parquet",
         pa.table(
@@ -251,6 +263,50 @@ def test_writes_partitioned_gold_dataset(settings: Settings) -> None:
     gold_weekly.transform(settings)
     assert first.read_bytes()[:4] == b"PAR1"
 
+    # A valid v1 artifact must be upgraded even when the Silver inputs are unchanged.
+    metadata = json.loads(result.metadata_path.read_text())
+    assert metadata["score_method_version"] == "academic-index-v1"
+    assert metadata["risk_classification"]["version"] == "four-level-v1"
+    assert [band["upper_score"] for band in metadata["risk_classification"]["bands"]] == [
+        0.25,
+        0.5,
+        0.75,
+        1.0,
+    ]
+    new_columns = ["water_stress_risk_class", "risk_classification_version", "monitoring_guidance"]
+    legacy = pq.ParquetFile(first).read().drop(new_columns)
+    common.write_parquet(first, legacy)
+    checkpoint_path = first.parent / "_quality.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["input_signature"] = hashlib.sha256(
+        json.dumps(
+            {
+                "inputs": metadata["input_checksums"],
+                "gold": settings.gold.model_dump(mode="json"),
+                "study": settings.study.model_dump(mode="json"),
+                "contract": "gold-consumption-v1",
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    checkpoint["checksum"] = hashlib.sha256(first.read_bytes()).hexdigest()
+    common.write_json(checkpoint_path, checkpoint)
+    gold_weekly.transform(settings)
+    upgraded = pq.ParquetFile(first).read()
+    assert upgraded["water_stress_score"].equals(legacy["water_stress_score"])
+    assert upgraded["water_stress_class"].equals(legacy["water_stress_class"])
+    assert upgraded["water_stress_risk_class"].to_pylist() == ["attention"]
+
+    monkeypatch.setattr(
+        gold_weekly,
+        "RISK_CLASSIFICATION_POLICY",
+        replace(gold_weekly.RISK_CLASSIFICATION_POLICY, version="four-level-test"),
+    )
+    gold_weekly.transform(settings)
+    assert pq.ParquetFile(first).read()["risk_classification_version"].to_pylist() == [
+        "four-level-test"
+    ]
+
 
 def _consumption_table(settings: Settings, weather: pa.Table) -> pa.Table:
     return gold_weekly.build_weekly_table(
@@ -270,6 +326,12 @@ def test_partial_weather_never_produces_risk_score(settings: Settings) -> None:
     assert table["water_stress_score"].to_pylist() == [None]
     assert table["score_status"].to_pylist() == ["unavailable"]
     assert table["weather_expected_days"].to_pylist() == [3]
+    assert table["water_stress_risk_class"].to_pylist() == [None]
+    assert table["water_stress_class"].to_pylist() == [None]
+    assert table["risk_classification_version"].to_pylist() == ["four-level-v1"]
+    assert table["monitoring_guidance"].to_pylist() == [
+        "Sem dados suficientes para classificar o risco."
+    ]
 
 
 def test_complete_weather_without_satellite_has_explicit_partial_status(settings: Settings) -> None:
@@ -277,6 +339,24 @@ def test_complete_weather_without_satellite_has_explicit_partial_status(settings
     assert table["score_status"].to_pylist() == ["partial"]
     assert table["score_available_weight"].to_pylist() == [0.5]
     assert table["weather_cell_id"].to_pylist() == ["cell-1"]
+    assert table["water_stress_risk_class"].to_pylist() == ["attention"]
+
+
+def test_zero_score_is_low_risk_and_remains_partial_without_satellite(settings: Settings) -> None:
+    weather = _weather_table().set_column(4, "precipitation_mm_day", pa.array([4.0] * 3))
+    table = _consumption_table(settings, weather)
+    assert table["water_stress_score"].to_pylist() == [0.0]
+    assert table["water_stress_risk_class"].to_pylist() == ["low"]
+    assert table["score_status"].to_pylist() == ["partial"]
+
+
+def test_empty_soy_selection_preserves_classification_schema(settings: Settings) -> None:
+    settings = settings.model_copy(
+        update={"gold": settings.gold.model_copy(update={"soy_fraction_threshold": 0.75})}
+    )
+    table = _consumption_table(settings, _weather_table())
+    assert table.num_rows == 0
+    assert table.schema.equals(gold_weekly.gold_schema(settings), check_metadata=True)
 
 
 def test_duplicate_weather_is_rejected(settings: Settings) -> None:

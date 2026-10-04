@@ -458,3 +458,49 @@ Gold: filtro temporal semanal, status complete/partial/unavailable, cobertura e 
 ponderadas pela área equivalente de soja. Não presuma framework sem olhar o repositório. Não faça
 commit nem push sem autorização explícita.
 ```
+
+## Classificação para o dashboard — atualização 2026-10-03
+
+- Foi implementada a política `four-level-v1` em `water_stress.risk_classification`, como regra
+  pura e independente da interface. Classifica o score original 0–1 sem arredondamento: baixo
+  [0; 0,25], atenção (0,25; 0,50], alto (0,50; 0,75] e crítico (0,75; 1]. Zero é válido;
+  score ausente não recebe classe. Valores não finitos ou fora da escala são rejeitados.
+- O contrato `gold-consumption-v2` acrescenta `water_stress_risk_class`,
+  `risk_classification_version` e `monitoring_guidance`. A fórmula `academic-index-v1`, os pesos
+  e a classe legada `water_stress_class` permanecem disponíveis. Orientações em português
+  tratam de monitoramento e avaliação, sem prescrição de irrigação.
+- A Gold registra limites, rótulos, orientações e versões nos metadados. Checkpoints incluem a
+  política completa e o contrato: a próxima execução regenera outputs v1; outputs v2 íntegros
+  continuam reutilizáveis. Grain, chave, CRS, resolução e partições permanecem iguais.
+- A migration `003_risk_classification.sql` acrescenta os campos à tabela e ao final da view
+  `gold.water_stress_dashboard`, preservando colunas anteriores e consumidores dependentes.
+  Linhas existentes ficam com os novos campos nulos até regeneração/recarga. O carregador aceita
+  Parquet v1 e grava nulos nos campos novos; a migration 003 deve anteceder a carga atualizada.
+- O guia de implementação documenta consumo pelo dashboard: separar ausência de baixo risco,
+  identificar classificações ainda não atualizadas, mostrar status/componentes/peso disponível/
+  idade do satélite e publicar cobertura junto a agregações ponderadas pela área de soja.
+- ETc, chuva efetiva, referências históricas/fenológicas, retenção de água no solo e persistência
+  do estresse continuam pendentes de métodos, dados e validação. As quatro faixas não acrescentam
+  esses sinais ao cálculo. Tecnologia e cliente visual ainda não foram definidos.
+- Validação: 131 testes passaram, 1 foi pulado (Airflow indisponível no ambiente padrão),
+  cobertura 86,07%; Ruff, formatação e mypy aprovados. Em PostgreSQL 17/PostGIS temporário, com
+  oito linhas sintéticas, foram verificadas migrations 001–003, reaplicação sem pendências,
+  preservação de view dependente/ordem de colunas, COPY/UPSERT incremental, idempotência,
+  compatibilidade de carga v1, todas as classes, ausência e constraints SQL. O banco temporário
+  foi encerrado e removido.
+- Nenhum dado local foi reprocessado e a migration 003 não foi aplicada ao PostgreSQL do projeto.
+  Para ativar o contrato nos dados locais, carregar primeiro o `.env` na mesma sessão do terminal.
+  O arquivo não é carregado automaticamente; sem suas variáveis o YAML mantém o banco desabilitado:
+
+  ```bash
+  set -a
+  source .env
+  set +a
+
+  uv run python -m water_stress.pipelines.run_database --migrate
+  uv run python -m water_stress.pipelines.run_transformation --source gold-weekly
+  uv run python -m water_stress.pipelines.run_database --load --dataset water_stress_weekly
+  ```
+
+  Se executar via Airflow, reconstruir a imagem com o código atualizado antes de retomar o DAG.
+  Não é necessário repetir ingestão Bronze nem transformação Silver. Nenhum commit ou push.

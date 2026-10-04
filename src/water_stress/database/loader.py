@@ -96,6 +96,9 @@ DATASET_COLUMNS: dict[str, tuple[str, ...]] = {
         "weather_expected_days",
         "score_status",
         "score_available_weight",
+        "water_stress_risk_class",
+        "risk_classification_version",
+        "monitoring_guidance",
     ),
 }
 
@@ -109,6 +112,14 @@ PRIMARY_KEYS = {
 }
 
 LOAD_BATCH_SIZE = 10_000
+
+# Gold v1 files remain loadable after migration 003, with no invented classification.
+GOLD_V2_COLUMNS = {"water_stress_risk_class", "risk_classification_version", "monitoring_guidance"}
+
+
+def _required_columns(dataset: str) -> set[str]:
+    expected = set(DATASET_COLUMNS[dataset]) - {"geometry_wkb"}
+    return expected - GOLD_V2_COLUMNS if dataset == "water_stress_weekly" else expected
 
 
 def source_paths(settings: Settings, dataset: str) -> tuple[Path, ...]:
@@ -316,7 +327,7 @@ def _finish_run(
 
 
 def _validate_parquet_files(dataset: str, paths: tuple[Path, ...]) -> None:
-    expected = set(DATASET_COLUMNS[dataset]) - {"geometry_wkb"}
+    expected = _required_columns(dataset)
     for path in paths:
         names = set(pq.ParquetFile(path).schema_arrow.names)
         missing = expected - names
@@ -392,7 +403,7 @@ def load_dataset(
 ) -> int:
     if dataset not in DATASET_COLUMNS:
         raise ValueError(f"Unsupported relational dataset: {dataset}")
-    expected = set(DATASET_COLUMNS[dataset]) - {"geometry_wkb"}
+    expected = _required_columns(dataset)
     missing = expected - set(table.column_names)
     if missing:
         raise ValueError(f"Dataset {dataset} is missing columns: {sorted(missing)}")

@@ -415,6 +415,18 @@ As fórmulas iniciais são `water_balance_mm_7d = precipitation_mm_7d - eto_mm_7
 prescrição agronômica. O `water_stress_score` combina déficit, NDVI e NDMI normalizados, com pesos
 configuráveis; os parâmetros atuais são provisórios e devem ser validados agronomicamente.
 
+A Gold também produz `water_stress_risk_class` em quatro níveis: baixo (0–25), atenção
+(>25–50), alto (>50–75) e crítico (>75–100), na escala visual. A política `four-level-v1`
+classifica antes do arredondamento e gera orientações de monitoramento em português. A classe
+legada `water_stress_class` e a fórmula atual permanecem disponíveis. Scores ausentes têm classe
+nula e devem aparecer como “Sem dados suficientes”, separados de baixo risco.
+
+O contrato `gold-consumption-v2` exige a migration `003_risk_classification.sql` para o consumo
+relacional e a regeneração/recarga da Gold para preencher os novos campos. Os checkpoints detectam
+a mudança de contrato. Consulte [o contrato e as regras de consumo](docs/implementation_guide.md#classificação-em-quatro-níveis)
+para limites, versões, status e requisitos de apresentação. ETc, chuva efetiva, histórico dos
+índices, retenção hídrica do solo e persistência do estresse ainda não compõem o indicador.
+
 ## Preparação do ambiente
 
 Requisitos:
