@@ -516,6 +516,10 @@ uv run python -m water_stress.pipelines.run_database --register-bronze
 uv run python -m water_stress.pipelines.run_database --load --dataset all
 ```
 
+O carregador relacional lê os arquivos Parquet em lotes de até 10 mil linhas. Cada dataset é
+copiado para uma tabela temporária e aplicado por `UPSERT` dentro de uma transação própria;
+repetir a carga após uma interrupção é seguro e não duplica as chaves analíticas.
+
 Dependências:
 
 - NASA POWER, SoilGrids e Sentinel-2 precisam do limite IBGE;

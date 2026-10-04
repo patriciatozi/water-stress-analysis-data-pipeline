@@ -27,7 +27,8 @@ Esse ambiente é destinado à execução local. Para processamento estadual, res
 `load_database=false` publica somente os arquivos. Com `true`, executa migrations, registra
 manifestos Bronze e carrega todas as tabelas Silver/Gold em ordem de dependência. Isso requer
 PostgreSQL/PostGIS configurado e habilitado em `.env`, e disponibilidade de todos os datasets Silver.
-A carga atual materializa tabelas em memória; considere esse custo ao reservar RAM.
+O carregador lê os Parquet em lotes de até 10 mil linhas e confirma cada dataset em uma transação,
+mantendo o uso de memória do cliente limitado e permitindo repetir a carga com segurança.
 
 O processamento completo respeita estas dependências:
 

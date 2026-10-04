@@ -7,7 +7,7 @@ from pathlib import Path
 
 from water_stress.config import load_settings
 from water_stress.database.client import apply_migrations, connect
-from water_stress.database.loader import load_dataset, register_bronze_manifests, source_table
+from water_stress.database.loader import load_dataset_files, register_bronze_manifests, source_paths
 
 LOAD_ORDER = (
     "dim_spatial_grid",
@@ -58,11 +58,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         loaded: dict[str, int] = {}
         if args.load:
             for dataset in selected:
-                table = source_table(settings, dataset)
-                loaded[dataset] = load_dataset(
+                loaded[dataset] = load_dataset_files(
                     connection,
                     dataset,
-                    table,
+                    source_paths(settings, dataset),
                     processing_version=settings.project.version,
                 )
     print(

@@ -108,20 +108,11 @@ PRIMARY_KEYS = {
     "water_stress_weekly": ("grid_id", "week_start"),
 }
 
-
-def _read_file(path: Path) -> pa.Table:
-    return pq.ParquetFile(path).read()
+LOAD_BATCH_SIZE = 10_000
 
 
-def _read_paths(paths: Iterable[Path]) -> pa.Table:
-    files = sorted(paths)
-    if not files:
-        raise FileNotFoundError("No Parquet files found for database loading")
-    return pa.concat_tables([_read_file(path) for path in files])
-
-
-def source_table(settings: Settings, dataset: str) -> pa.Table:
-    """Read one derived dataset without Hive partition inference."""
+def source_paths(settings: Settings, dataset: str) -> tuple[Path, ...]:
+    """Return the Parquet files for a relational dataset in stable order."""
     paths: dict[str, Iterable[Path]] = {
         "dim_spatial_grid": (spatial_grid.dataset_path(settings) / "grid.parquet",),
         "crop_mask": (crop_mask.dataset_path(settings) / "part-000.parquet",),
@@ -134,11 +125,10 @@ def source_table(settings: Settings, dataset: str) -> pa.Table:
     }
     if dataset not in paths:
         raise ValueError(f"Unsupported relational dataset: {dataset}")
-    return _read_paths(paths[dataset])
-
-
-def source_tables(settings: Settings) -> dict[str, pa.Table]:
-    return {dataset: source_table(settings, dataset) for dataset in DATASET_COLUMNS}
+    files = tuple(sorted(paths[dataset]))
+    if not files:
+        raise FileNotFoundError(f"No Parquet files found for database dataset {dataset}")
+    return files
 
 
 def register_bronze_manifests(connection: Any, root: Path) -> int:
@@ -212,6 +202,80 @@ def _copy_rows(
             copy.write_row(row)
 
 
+def _copy_batch(
+    connection: Any,
+    dataset: str,
+    batch: pa.RecordBatch,
+    processing_version: str,
+) -> None:
+    columns = DATASET_COLUMNS[dataset]
+    values = batch.to_pylist()
+    rows: Iterable[tuple[object, ...]]
+    if dataset == "dim_spatial_grid":
+        rows = (
+            (
+                row["grid_id"],
+                memoryview(row["geometry"]),
+                row["centroid_latitude"],
+                row["centroid_longitude"],
+                row["area_km2"],
+                processing_version,
+            )
+            for row in values
+        )
+    else:
+        rows = (
+            (*tuple(row.get(column) for column in columns), processing_version) for row in values
+        )
+    _copy_rows(connection, f"_stage_{dataset}", (*columns, "processing_version"), rows)
+
+
+def _merge_stage(connection: Any, dataset: str) -> None:
+    columns = DATASET_COLUMNS[dataset]
+    if dataset == "dim_spatial_grid":
+        sql = """
+            INSERT INTO silver.dim_spatial_grid
+                (grid_id, geometry, centroid_latitude, centroid_longitude,
+                 area_km2, processing_version)
+            SELECT grid_id, ST_GeomFromWKB(geometry_wkb, 5880), centroid_latitude,
+                   centroid_longitude, area_km2, processing_version
+            FROM _stage_dim_spatial_grid
+            ON CONFLICT (grid_id) DO UPDATE SET
+                geometry = EXCLUDED.geometry,
+                centroid_latitude = EXCLUDED.centroid_latitude,
+                centroid_longitude = EXCLUDED.centroid_longitude,
+                area_km2 = EXCLUDED.area_km2,
+                processing_version = EXCLUDED.processing_version,
+                loaded_at_utc = now()
+        """
+    else:
+        destination = (
+            f"silver.{dataset}" if dataset != "water_stress_weekly" else "gold.water_stress_weekly"
+        )
+        updates = ", ".join(
+            f"{column} = EXCLUDED.{column}"
+            for column in (*columns, "processing_version")
+            if column not in PRIMARY_KEYS[dataset]
+        )
+        keys = ", ".join(PRIMARY_KEYS[dataset])
+        target_columns = (*columns, "processing_version")
+        if dataset == "weather_daily":
+            target_columns = (*target_columns, "geometry")
+            select_sql = (
+                f"SELECT {', '.join(columns)}, processing_version, "
+                f"ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) FROM _stage_{dataset}"
+            )
+        else:
+            select_sql = f"SELECT {', '.join(target_columns)} FROM _stage_{dataset}"
+        sql = f"""
+            INSERT INTO {destination} ({", ".join(target_columns)})
+            {select_sql}
+            ON CONFLICT ({keys}) DO UPDATE SET {updates}, loaded_at_utc = now()
+        """
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+
+
 def _begin_run(connection: Any, dataset: str) -> uuid.UUID:
     run_id = uuid.uuid4()
     with connection.cursor() as cursor:
@@ -251,76 +315,72 @@ def _finish_run(
         )
 
 
-def _upsert_rows(
-    connection: Any,
-    dataset: str,
-    table: pa.Table,
-    processing_version: str,
-) -> int:
-    columns = DATASET_COLUMNS[dataset]
-    rows: Iterable[tuple[object, ...]]
-    if dataset == "dim_spatial_grid":
-        values = table.to_pylist()
-        rows = (
-            (
-                row["grid_id"],
-                memoryview(row["geometry"]),
-                row["centroid_latitude"],
-                row["centroid_longitude"],
-                row["area_km2"],
-                processing_version,
-            )
-            for row in values
-        )
-        _copy_rows(connection, "_stage_dim_spatial_grid", (*columns, "processing_version"), rows)
-        sql = """
-            INSERT INTO silver.dim_spatial_grid
-                (grid_id, geometry, centroid_latitude, centroid_longitude,
-                 area_km2, processing_version)
-            SELECT grid_id, ST_GeomFromWKB(geometry_wkb, 5880), centroid_latitude,
-                   centroid_longitude, area_km2, processing_version
-            FROM _stage_dim_spatial_grid
-            ON CONFLICT (grid_id) DO UPDATE SET
-                geometry = EXCLUDED.geometry,
-                centroid_latitude = EXCLUDED.centroid_latitude,
-                centroid_longitude = EXCLUDED.centroid_longitude,
-                area_km2 = EXCLUDED.area_km2,
-                processing_version = EXCLUDED.processing_version,
-                loaded_at_utc = now()
-        """
-    else:
-        destination = (
-            f"silver.{dataset}" if dataset != "water_stress_weekly" else "gold.water_stress_weekly"
-        )
-        rows = [
-            (*tuple(row.get(column) for column in columns), processing_version)
-            for row in table.to_pylist()
-        ]
+def _validate_parquet_files(dataset: str, paths: tuple[Path, ...]) -> None:
+    expected = set(DATASET_COLUMNS[dataset]) - {"geometry_wkb"}
+    for path in paths:
+        names = set(pq.ParquetFile(path).schema_arrow.names)
+        missing = expected - names
+        if missing:
+            raise ValueError(f"Dataset {dataset} is missing columns in {path}: {sorted(missing)}")
+
+
+def _create_stage(connection: Any, dataset: str) -> None:
+    with connection.cursor() as cursor:
         stage = f"_stage_{dataset}"
-        _copy_rows(connection, stage, (*columns, "processing_version"), rows)
-        updates = ", ".join(
-            f"{column} = EXCLUDED.{column}"
-            for column in (*columns, "processing_version")
-            if column not in PRIMARY_KEYS[dataset]
-        )
-        keys = ", ".join(PRIMARY_KEYS[dataset])
-        target_columns = (*columns, "processing_version")
-        if dataset == "weather_daily":
-            target_columns = (*target_columns, "geometry")
-            select_sql = (
-                f"SELECT {', '.join(columns)}, processing_version, "
-                f"ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) FROM {stage}"
+        if dataset == "dim_spatial_grid":
+            cursor.execute(
+                """
+                CREATE TEMP TABLE _stage_dim_spatial_grid (
+                    grid_id text,
+                    geometry_wkb bytea,
+                    centroid_latitude double precision,
+                    centroid_longitude double precision,
+                    area_km2 double precision,
+                    processing_version text
+                ) ON COMMIT DROP
+                """
             )
         else:
-            select_sql = f"SELECT {', '.join(target_columns)} FROM {stage}"
-        sql = f"""
-            INSERT INTO {destination} ({", ".join(target_columns)})
-            {select_sql}
-            ON CONFLICT ({keys}) DO UPDATE SET {updates}, loaded_at_utc = now()
-        """
-    with connection.cursor() as cursor:
-        cursor.execute(sql)
-    return table.num_rows
+            destination = (
+                f"silver.{dataset}"
+                if dataset != "water_stress_weekly"
+                else "gold.water_stress_weekly"
+            )
+            cursor.execute(
+                f"CREATE TEMP TABLE {stage} (LIKE {destination} INCLUDING DEFAULTS) ON COMMIT DROP"
+            )
+            if dataset == "weather_daily":
+                cursor.execute(f"ALTER TABLE {stage} ALTER COLUMN geometry DROP NOT NULL")
+
+
+def _load_batches(
+    connection: Any,
+    dataset: str,
+    batches: Iterable[pa.RecordBatch],
+    *,
+    processing_version: str,
+) -> int:
+    run_id = _begin_run(connection, dataset)
+    try:
+        _create_stage(connection, dataset)
+        count = 0
+        for batch in batches:
+            _copy_batch(connection, dataset, batch, processing_version)
+            count += batch.num_rows
+        _merge_stage(connection, dataset)
+        _finish_run(connection, run_id, dataset, count, processing_version)
+        connection.commit()
+        return count
+    except Exception as exc:
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE control.load_run SET status = 'failed', finished_at_utc = %s, "
+                "error_message = %s WHERE run_id = %s",
+                (datetime.now(UTC), str(exc), run_id),
+            )
+        connection.commit()
+        raise
 
 
 def load_dataset(
@@ -336,46 +396,39 @@ def load_dataset(
     missing = expected - set(table.column_names)
     if missing:
         raise ValueError(f"Dataset {dataset} is missing columns: {sorted(missing)}")
-    run_id = _begin_run(connection, dataset)
-    try:
-        with connection.cursor() as cursor:
-            stage = f"_stage_{dataset}"
-            if dataset == "dim_spatial_grid":
-                cursor.execute(
-                    """
-                    CREATE TEMP TABLE _stage_dim_spatial_grid (
-                        grid_id text,
-                        geometry_wkb bytea,
-                        centroid_latitude double precision,
-                        centroid_longitude double precision,
-                        area_km2 double precision,
-                        processing_version text
-                    ) ON COMMIT DROP
-                    """
-                )
-            else:
-                destination = (
-                    f"silver.{dataset}"
-                    if dataset != "water_stress_weekly"
-                    else "gold.water_stress_weekly"
-                )
-                cursor.execute(
-                    f"CREATE TEMP TABLE {stage} (LIKE {destination} INCLUDING DEFAULTS) "
-                    "ON COMMIT DROP"
-                )
-                if dataset == "weather_daily":
-                    cursor.execute(f"ALTER TABLE {stage} ALTER COLUMN geometry DROP NOT NULL")
-        count = _upsert_rows(connection, dataset, table, processing_version)
-        _finish_run(connection, run_id, dataset, count, processing_version)
-        connection.commit()
-        return count
-    except Exception as exc:
-        connection.rollback()
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "UPDATE control.load_run SET status = 'failed', finished_at_utc = %s, "
-                "error_message = %s WHERE run_id = %s",
-                (datetime.now(UTC), str(exc), run_id),
-            )
-        connection.commit()
-        raise
+    return _load_batches(
+        connection,
+        dataset,
+        table.to_batches(max_chunksize=LOAD_BATCH_SIZE),
+        processing_version=processing_version,
+    )
+
+
+def load_dataset_files(
+    connection: Any,
+    dataset: str,
+    paths: Iterable[Path],
+    *,
+    processing_version: str,
+    batch_size: int = LOAD_BATCH_SIZE,
+) -> int:
+    """Stream Parquet row groups to PostgreSQL with bounded client memory."""
+    if dataset not in DATASET_COLUMNS:
+        raise ValueError(f"Unsupported relational dataset: {dataset}")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    files = tuple(sorted(paths))
+    if not files:
+        raise FileNotFoundError(f"No Parquet files found for database dataset {dataset}")
+    _validate_parquet_files(dataset, files)
+
+    def batches() -> Iterable[pa.RecordBatch]:
+        for path in files:
+            yield from pq.ParquetFile(path).iter_batches(batch_size=batch_size)
+
+    return _load_batches(
+        connection,
+        dataset,
+        batches(),
+        processing_version=processing_version,
+    )

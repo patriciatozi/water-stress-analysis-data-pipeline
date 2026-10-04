@@ -4,12 +4,17 @@ import json
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import box
 
 from water_stress.config import DatabaseSettings
 from water_stress.database.client import apply_migrations, connect
-from water_stress.database.loader import load_dataset, register_bronze_manifests
+from water_stress.database.loader import (
+    load_dataset,
+    load_dataset_files,
+    register_bronze_manifests,
+)
 from water_stress.pipelines.run_database import build_parser
 
 
@@ -31,6 +36,7 @@ class FakeCursor:
     def __init__(self) -> None:
         self.executed: list[tuple[str, object]] = []
         self.copy_stream = FakeCopy()
+        self.copy_calls = 0
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -45,6 +51,7 @@ class FakeCursor:
         return None
 
     def copy(self, _query: str) -> FakeCopy:
+        self.copy_calls += 1
         return self.copy_stream
 
 
@@ -124,6 +131,45 @@ def test_loads_regular_dataset_using_copy_and_upsert() -> None:
     assert count == 1
     assert connection.commits == 1
     assert connection.cursor_instance.copy_stream.rows == [("cell-1", 2023, 0.5, "0.1.0")]
+
+
+def test_streams_parquet_files_in_bounded_batches(tmp_path: Path) -> None:
+    first = tmp_path / "part-000.parquet"
+    second = tmp_path / "part-001.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "grid_id": ["cell-1", "cell-2", "cell-3"],
+                "year": [2023] * 3,
+                "soy_fraction": [0.1, 0.2, 0.3],
+            }
+        ),
+        first,
+    )
+    pq.write_table(
+        pa.table({"grid_id": ["cell-4", "cell-5"], "year": [2023] * 2, "soy_fraction": [0.4, 0.5]}),
+        second,
+    )
+    connection = FakeConnection()
+
+    count = load_dataset_files(
+        connection,
+        "crop_mask",
+        [second, first],
+        processing_version="0.1.0",
+        batch_size=2,
+    )
+
+    assert count == 5
+    assert connection.cursor_instance.copy_calls == 3
+    assert [row[0] for row in connection.cursor_instance.copy_stream.rows] == [
+        "cell-1",
+        "cell-2",
+        "cell-3",
+        "cell-4",
+        "cell-5",
+    ]
+    assert connection.commits == 1
 
 
 def test_loads_grid_geometry_and_weather_point() -> None:
