@@ -13,14 +13,18 @@ import pyarrow.parquet as pq
 from water_stress.config import Settings
 from water_stress.transformation import (
     crop_mask,
+    gold_water_balance,
     gold_weekly,
     satellite_observation,
     soil_features,
     spatial_grid,
     weather_daily,
 )
+from water_stress.transformation.water_balance_schema import HYDRAULIC_SCHEMA, WEEKLY_SCHEMA
 
 DATASET_COLUMNS: dict[str, tuple[str, ...]] = {
+    "soil_hydraulics": tuple(HYDRAULIC_SCHEMA.names),
+    "water_stress_weekly_v2": tuple(WEEKLY_SCHEMA.names),
     "dim_spatial_grid": (
         "grid_id",
         "geometry_wkb",
@@ -103,6 +107,8 @@ DATASET_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 PRIMARY_KEYS = {
+    "soil_hydraulics": ("analysis_id", "grid_id"),
+    "water_stress_weekly_v2": ("analysis_id", "grid_id", "week_start", "scenario_id"),
     "dim_spatial_grid": ("grid_id",),
     "crop_mask": ("grid_id", "year"),
     "soil_features": ("grid_id",),
@@ -122,8 +128,12 @@ def _required_columns(dataset: str) -> set[str]:
     return expected - GOLD_V2_COLUMNS if dataset == "water_stress_weekly" else expected
 
 
-def source_paths(settings: Settings, dataset: str) -> tuple[Path, ...]:
+def source_paths(
+    settings: Settings, dataset: str, max_cells: int | None = None
+) -> tuple[Path, ...]:
     """Return the Parquet files for a relational dataset in stable order."""
+    if dataset in ("soil_hydraulics", "water_stress_weekly_v2"):
+        return gold_water_balance.published_paths(settings, dataset, max_cells)
     paths: dict[str, Iterable[Path]] = {
         "dim_spatial_grid": (spatial_grid.dataset_path(settings) / "grid.parquet",),
         "crop_mask": (crop_mask.dataset_path(settings) / "part-000.parquet",),
@@ -241,6 +251,15 @@ def _copy_batch(
     _copy_rows(connection, f"_stage_{dataset}", (*columns, "processing_version"), rows)
 
 
+def _destination(dataset: str) -> str:
+    layer = (
+        "gold"
+        if dataset in ("water_stress_weekly", "soil_hydraulics", "water_stress_weekly_v2")
+        else "silver"
+    )
+    return f"{layer}.{dataset}"
+
+
 def _merge_stage(connection: Any, dataset: str) -> None:
     columns = DATASET_COLUMNS[dataset]
     if dataset == "dim_spatial_grid":
@@ -260,9 +279,7 @@ def _merge_stage(connection: Any, dataset: str) -> None:
                 loaded_at_utc = now()
         """
     else:
-        destination = (
-            f"silver.{dataset}" if dataset != "water_stress_weekly" else "gold.water_stress_weekly"
-        )
+        destination = _destination(dataset)
         updates = ", ".join(
             f"{column} = EXCLUDED.{column}"
             for column in (*columns, "processing_version")
@@ -285,6 +302,13 @@ def _merge_stage(connection: Any, dataset: str) -> None:
         """
     with connection.cursor() as cursor:
         cursor.execute(sql)
+        if dataset in ("soil_hydraulics", "water_stress_weekly_v2"):
+            matches = " AND ".join(f"s.{key} = d.{key}" for key in PRIMARY_KEYS[dataset])
+            cursor.execute(
+                f"DELETE FROM {_destination(dataset)} d "
+                f"WHERE d.analysis_id IN (SELECT DISTINCT analysis_id FROM _stage_{dataset}) "
+                f"AND NOT EXISTS (SELECT 1 FROM _stage_{dataset} s WHERE {matches})"
+            )
 
 
 def _begin_run(connection: Any, dataset: str) -> uuid.UUID:
@@ -352,11 +376,7 @@ def _create_stage(connection: Any, dataset: str) -> None:
                 """
             )
         else:
-            destination = (
-                f"silver.{dataset}"
-                if dataset != "water_stress_weekly"
-                else "gold.water_stress_weekly"
-            )
+            destination = _destination(dataset)
             cursor.execute(
                 f"CREATE TEMP TABLE {stage} (LIKE {destination} INCLUDING DEFAULTS) ON COMMIT DROP"
             )
@@ -378,6 +398,8 @@ def _load_batches(
         for batch in batches:
             _copy_batch(connection, dataset, batch, processing_version)
             count += batch.num_rows
+        if dataset in ("soil_hydraulics", "water_stress_weekly_v2") and count == 0:
+            raise ValueError("Cannot reconcile an empty water-balance dataset")
         _merge_stage(connection, dataset)
         _finish_run(connection, run_id, dataset, count, processing_version)
         connection.commit()

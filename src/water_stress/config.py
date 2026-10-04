@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import date
+from math import isfinite
 from pathlib import Path
 from typing import Any, Literal
 
@@ -156,6 +157,45 @@ class HttpSettings(BaseModel):
     backoff_seconds: float = Field(ge=0)
 
 
+class WaterBalanceSettings(BaseModel):
+    """Explicit scenario assumptions, not observed planting or soil moisture."""
+
+    planting_date: date = date(2023, 10, 15)
+    stage_days: tuple[int, int, int, int] = (20, 30, 60, 30)
+    kc_initial: float = Field(default=0.4, gt=0, le=2, allow_inf_nan=False)
+    kc_mid: float = Field(default=1.15, gt=0, le=2, allow_inf_nan=False)
+    kc_end: float = Field(default=0.5, gt=0, le=2, allow_inf_nan=False)
+    depth_m: float = 0.3
+    depletion_fraction: float = Field(default=0.5, gt=0, lt=1, allow_inf_nan=False)
+    carbon_to_organic_matter: float = Field(default=1.724, gt=0, allow_inf_nan=False)
+    runoff_fraction: float = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
+    initial_water_fractions: tuple[float, ...] = (0.25, 0.5, 0.75)
+    block_size: int = Field(default=2048, ge=1, le=10000)
+
+    @field_validator("depth_m")
+    @classmethod
+    def surface_layer_only(cls, value: float) -> float:
+        if value != 0.3:
+            raise ValueError("Only the existing homogeneous 0.30 m soil layer is supported")
+        return value
+
+    @field_validator("stage_days")
+    @classmethod
+    def positive_stages(cls, value: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if any(days < 1 for days in value):
+            raise ValueError("All four crop stages must have positive durations")
+        return value
+
+    @field_validator("initial_water_fractions")
+    @classmethod
+    def valid_initial_water(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        if not value or len(set(value)) != len(value):
+            raise ValueError("Initial water scenarios must be nonempty and unique")
+        if any(not isfinite(fraction) or not 0 <= fraction <= 1 for fraction in value):
+            raise ValueError("Initial water fractions must be finite and between 0 and 1")
+        return tuple(sorted(value))
+
+
 class StorageSettings(BaseModel):
     root_path: Path
     silver_root_path: Path = Path("data/silver")
@@ -189,6 +229,7 @@ class Settings(BaseSettings):
     mapbiomas: MapBiomasSettings
     spatial: SpatialArchitectureSettings
     gold: GoldSettings
+    water_balance: WaterBalanceSettings = Field(default_factory=WaterBalanceSettings)
     http: HttpSettings
     storage: StorageSettings
     database: DatabaseSettings

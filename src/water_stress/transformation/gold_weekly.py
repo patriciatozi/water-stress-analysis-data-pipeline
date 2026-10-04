@@ -19,7 +19,11 @@ from shapely.geometry import Point
 from shapely.strtree import STRtree
 
 from water_stress.config import Settings
-from water_stress.risk_classification import RISK_CLASSIFICATION_POLICY, classify_score
+from water_stress.risk_classification import (
+    RISK_CLASSIFICATION_POLICY,
+    classify_score,
+    lower_index_stress,
+)
 from water_stress.transformation import (
     common,
     crop_mask,
@@ -347,11 +351,6 @@ def _bounded_stress(value: float, reference: float) -> float:
     return max(0.0, min(1.0, value / reference))
 
 
-def _lower_is_stress(value: float, threshold: float) -> float:
-    denominator = max(abs(threshold), 1e-9)
-    return max(0.0, min(1.0, (threshold - value) / denominator))
-
-
 def _score(settings: Settings, values: dict[str, Any]) -> tuple[float | None, str | None, int]:
     components: list[tuple[float, float]] = []
     if values.get("water_deficit_mm_7d") is None:
@@ -369,7 +368,7 @@ def _score(settings: Settings, values: dict[str, Any]) -> tuple[float | None, st
         components.append(
             (
                 settings.gold.ndvi_weight,
-                _lower_is_stress(float(ndvi), settings.gold.ndvi_stress_threshold),
+                lower_index_stress(float(ndvi), settings.gold.ndvi_stress_threshold),
             )
         )
     ndmi = values.get("ndmi_median")
@@ -377,7 +376,7 @@ def _score(settings: Settings, values: dict[str, Any]) -> tuple[float | None, st
         components.append(
             (
                 settings.gold.ndmi_weight,
-                _lower_is_stress(float(ndmi), settings.gold.ndmi_stress_threshold),
+                lower_index_stress(float(ndmi), settings.gold.ndmi_stress_threshold),
             )
         )
     components = [(weight, value) for weight, value in components if weight > 0]

@@ -50,3 +50,8 @@ def classify_score(score: float | None) -> RiskBand | None:
     if not isfinite(score) or not 0 <= score <= 1:
         raise ValueError("Water-stress score must be finite and between 0 and 1, or None")
     return next(band for band in RISK_CLASSIFICATION_POLICY.bands if score <= band.upper_score)
+
+
+def lower_index_stress(value: float, threshold: float) -> float:
+    """Shared v1/v2 normalization; lower spectral indices increase the component."""
+    return max(0.0, min(1.0, (threshold - value) / max(abs(threshold), 1e-9)))

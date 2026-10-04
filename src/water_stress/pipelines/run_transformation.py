@@ -9,6 +9,7 @@ from water_stress.config import load_settings
 from water_stress.logging import configure_logging
 from water_stress.transformation import (
     crop_mask,
+    gold_water_balance,
     gold_weekly,
     nasa_power,
     satellite_observation,
@@ -31,10 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
             "weather-daily",
             "satellite-observation",
             "gold-weekly",
+            "gold-water-balance",
         ),
         default="nasa-power",
     )
     parser.add_argument("--item-id", action="append", help="Sentinel-2 STAC item ID")
+    parser.add_argument("--max-cells", type=int, help="Isolated water-balance pilot cell limit")
     parser.add_argument(
         "--max-items",
         type=int,
@@ -66,6 +69,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     configure_logging()
     settings = load_settings(args.config)
+    if args.max_cells is not None and args.source != "gold-water-balance":
+        raise ValueError("--max-cells applies only to gold-water-balance")
+    if args.source == "gold-water-balance":
+        result = gold_water_balance.transform(settings, max_cells=args.max_cells)
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "dataset_path": str(result.dataset_path),
+                    "metadata_path": str(result.metadata_path),
+                    "row_count": result.row_count,
+                    "cell_count": result.cell_count,
+                    "analysis_id": result.analysis_id,
+                }
+            )
+        )
+        return 0
     if args.source == "satellite-observation":
         satellite_results = satellite_observation.transform(
             settings,

@@ -424,8 +424,25 @@ nula e devem aparecer como “Sem dados suficientes”, separados de baixo risco
 O contrato `gold-consumption-v2` exige a migration `003_risk_classification.sql` para o consumo
 relacional e a regeneração/recarga da Gold para preencher os novos campos. Os checkpoints detectam
 a mudança de contrato. Consulte [o contrato e as regras de consumo](docs/implementation_guide.md#classificação-em-quatro-níveis)
-para limites, versões, status e requisitos de apresentação. ETc, chuva efetiva, histórico dos
-índices, retenção hídrica do solo e persistência do estresse ainda não compõem o indicador.
+para limites, versões, status e requisitos de apresentação. Esses campos não alteram a fórmula v1.
+
+### Novo score com balanço diário e saída semanal
+
+O método `academic-index-v2-surface-30cm` estima retenção de água, ETc por fase da soja,
+chuva aproveitada e estresse diário em um reservatório de 30 cm. Publica resultados semanais para
+três cenários de água inicial, combinando componente hídrico, NDVI e NDMI com pesos provisórios
+50/30/20. Reutiliza clima Silver e features Gold locais, sem novo processamento Sentinel-2.
+Calendário e condição inicial são hipóteses; não há validação de campo.
+
+```bash
+uv run python -m water_stress.pipelines.run_transformation --source gold-water-balance --max-cells 32
+uv run python -m water_stress.pipelines.run_quality --dataset water_stress_weekly_v2 --max-cells 32
+```
+
+Tabelas novas: `gold.soil_hydraulics`, `gold.water_stress_weekly_v2`; consumo pela view
+`gold.water_stress_dashboard_v2`, criada pela migration 004. Nenhum TRUNCATE é necessário:
+a carga reconcilia apenas a análise carregada. O v1 continua disponível.
+Consulte [fórmulas, contratos, piloto e comandos de carga](docs/score_v2.md).
 
 ## Preparação do ambiente
 

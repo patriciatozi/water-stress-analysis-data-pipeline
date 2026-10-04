@@ -666,6 +666,11 @@ chuva efetiva, anomalias históricas/fenológicas, retenção hídrica do solo e
 continuam pendentes de métodos, dados e validação. A sequência de dias sem chuva não mede a
 persistência do estresse. A nova classificação não acrescenta esses sinais ao cálculo.
 
+O [plano de implementação do balanço diário](score_v2_implementation_plan.md) registra a evolução
+proposta usando somente os dados locais existentes, com saída semanal. As escolhas confirmadas
+são Kc por fase com calendário de cenário, score combinado e três condições iniciais de água.
+Esse modelo ainda não foi implementado e não altera o índice vigente.
+
 Saída: Parquet Zstandard por semana, schema, qualidade e metadados com checksums dos inputs.
 Checkpoints por semana reutilizam somente outputs íntegros com os mesmos inputs e parâmetros.
 Uma mudança de dados ou parâmetros recalcula as partições. A grade usa EPSG:5880 e resolução
@@ -721,8 +726,15 @@ WHERE week_start = DATE '2023-09-04';
 
 ## Orquestração Airflow
 
-`dags/water_stress_pipeline.py` coordena os CLIs existentes em três modos: execução completa,
-Sentinel-2 + Gold e somente Gold. O gate `pipelines/run_quality.py` impede publicação de Gold
+`dags/water_stress_pipeline.py` coordena os CLIs existentes em quatro modos: execução completa,
+Sentinel-2 + Gold, somente Gold e somente balanço hídrico. O gate `pipelines/run_quality.py` impede publicação de Gold
 vazia, relatório inválido ou qualidade `failed`, permitindo `warning` documentado. A carga no banco
 é opcional e segue migrations → manifestos → datasets em ordem de dependência.
 Instalação, comandos e limites operacionais: [guia Airflow](airflow.md).
+
+## Score com balanço diário superficial
+
+O método `academic-index-v2-surface-30cm` foi implementado em datasets separados, preservando v1.
+O [contrato do score v2](score_v2.md) especifica parâmetros, fórmulas, unidades, políticas de nulos,
+schemas, chaves, linhagem, retomada, piloto e comandos. A migration 004 cria tabelas e view aditivas;
+a carga reconcilia por `analysis_id`, sem TRUNCATE. Selecionar uma análise e cenário no consumo.

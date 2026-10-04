@@ -92,6 +92,20 @@ http:
   max_attempts: 3
   backoff_seconds: 1
 
+# Illustrative calendar and surface reservoir; these are not observed crop/root conditions.
+water_balance:
+  planting_date: "2023-10-15"
+  stage_days: [20, 30, 60, 30]
+  kc_initial: 0.4
+  kc_mid: 1.15
+  kc_end: 0.5
+  depth_m: 0.3
+  depletion_fraction: 0.5
+  carbon_to_organic_matter: 1.724
+  runoff_fraction: 0.0
+  initial_water_fractions: [0.25, 0.5, 0.75]
+  block_size: 2048
+
 storage:
   root_path: data/bronze
   silver_root_path: data/silver

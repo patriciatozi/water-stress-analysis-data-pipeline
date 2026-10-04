@@ -8,6 +8,8 @@ from pathlib import Path
 from water_stress.config import load_settings
 from water_stress.database.client import apply_migrations, connect
 from water_stress.database.loader import load_dataset_files, register_bronze_manifests, source_paths
+from water_stress.pipelines.run_quality import validate_quality_report
+from water_stress.transformation.gold_water_balance import dataset_path
 
 LOAD_ORDER = (
     "dim_spatial_grid",
@@ -16,6 +18,8 @@ LOAD_ORDER = (
     "weather_daily",
     "satellite_observation",
     "water_stress_weekly",
+    "soil_hydraulics",
+    "water_stress_weekly_v2",
 )
 
 
@@ -38,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Dataset to load; repeat the option or use all",
     )
     parser.add_argument("--migration-dir", type=Path, default=Path("migrations"))
+    parser.add_argument("--max-cells", type=int, help="Load the isolated water-balance pilot scope")
     return parser
 
 
@@ -48,6 +53,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = load_settings(args.config)
     datasets = args.dataset or ["all"]
     selected = LOAD_ORDER if "all" in datasets else tuple(dict.fromkeys(datasets))
+    if args.max_cells is not None and (
+        args.max_cells < 1
+        or any(dataset not in ("soil_hydraulics", "water_stress_weekly_v2") for dataset in selected)
+    ):
+        raise ValueError("--max-cells requires only water-balance datasets and a positive limit")
+    # Preserve the existing 'all' command when no v2 publication has been generated yet.
+    if "all" in datasets and not (dataset_path(settings) / "_metadata.json").is_file():
+        selected = tuple(
+            dataset
+            for dataset in selected
+            if dataset not in ("soil_hydraulics", "water_stress_weekly_v2")
+        )
+    if args.load and any(
+        dataset in ("soil_hydraulics", "water_stress_weekly_v2") for dataset in selected
+    ):
+        validate_quality_report(dataset_path(settings, args.max_cells) / "_quality.json")
     with connect(settings.database) as connection:
         migrated = apply_migrations(connection, args.migration_dir) if args.migrate else []
         registered = (
@@ -61,7 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 loaded[dataset] = load_dataset_files(
                     connection,
                     dataset,
-                    source_paths(settings, dataset),
+                    source_paths(settings, dataset, args.max_cells),
                     processing_version=settings.project.version,
                 )
     print(

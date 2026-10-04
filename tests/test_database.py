@@ -19,6 +19,7 @@ from water_stress.database.loader import (
 )
 from water_stress.pipelines.run_database import build_parser
 from water_stress.transformation.gold_weekly import gold_schema
+from water_stress.transformation.water_balance_schema import HYDRAULIC_SCHEMA, WEEKLY_SCHEMA
 
 
 class FakeCopy:
@@ -290,3 +291,28 @@ def test_loads_gold_classification_from_in_memory_table(settings: Settings) -> N
     assert copied[DATASET_COLUMNS["water_stress_weekly"].index("water_stress_risk_class")] == (
         "attention"
     )
+
+
+@pytest.mark.parametrize(
+    "dataset,schema",
+    [("soil_hydraulics", HYDRAULIC_SCHEMA), ("water_stress_weekly_v2", WEEKLY_SCHEMA)],
+)
+def test_water_balance_reconciliation_is_scoped_and_transactional(
+    dataset: str, schema: pa.Schema
+) -> None:
+    connection = FakeConnection()
+    table = pa.Table.from_pylist([{"analysis_id": "pilot", "grid_id": "cell-1"}], schema=schema)
+    assert load_dataset(connection, dataset, table, processing_version="test") == 1
+    queries = [query for query, _ in connection.cursor_instance.executed]
+    assert any(
+        f"INSERT INTO gold.{dataset}" in query and "ON CONFLICT" in query for query in queries
+    )
+    deletion = next(query for query in queries if query.startswith("DELETE FROM"))
+    assert "d.analysis_id IN" in deletion and "NOT EXISTS" in deletion
+    assert all("TRUNCATE" not in query for query in queries)
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+    empty = FakeConnection()
+    with pytest.raises(ValueError, match="empty"):
+        load_dataset(empty, dataset, table.slice(0, 0), processing_version="test")
+    assert empty.rollbacks == 1

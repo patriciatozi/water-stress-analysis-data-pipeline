@@ -50,6 +50,7 @@ def test_publication_is_blocked_by_quality_failure() -> None:
         ("full", "ingest_ibge"),
         ("satellite-gold", "transform_satellite"),
         ("gold-only", "transform_gold"),
+        ("water-balance-only", "transform_water_balance"),
     ],
 )
 def test_modes_select_existing_entries(
@@ -87,3 +88,21 @@ def test_dag_can_be_serialized() -> None:
 
     serialized = DagSerialization.to_dict(DAG)
     assert serialized["dag"]["dag_id"] == "water_stress_pipeline"
+
+
+def test_water_balance_reuses_local_features_without_satellite_processing() -> None:
+    assert DAG.get_task("transform_water_balance").upstream_task_ids == {"select_mode"}
+    assert DAG.get_task("validate_water_balance").upstream_task_ids == {"transform_water_balance"}
+    assert DAG.get_task("select_water_publication").upstream_task_ids == {"validate_water_balance"}
+    assert DAG.get_task("load_water_balance").upstream_task_ids == {"migrate_water_balance"}
+    assert "--dataset water_stress_weekly_v2" in DAG.get_task("load_water_balance").bash_command
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_water_publication_is_optional(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    callback = NAMESPACE["select_water_publication"]
+    monkeypatch.setitem(
+        callback.__globals__, "get_current_context", lambda: {"params": {"load_database": enabled}}
+    )
+    expected = "migrate_water_balance" if enabled else "water_balance_files_complete"
+    assert callback() == expected

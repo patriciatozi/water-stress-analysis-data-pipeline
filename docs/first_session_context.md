@@ -504,3 +504,49 @@ commit nem push sem autorização explícita.
 
   Se executar via Airflow, reconstruir a imagem com o código atualizado antes de retomar o DAG.
   Não é necessário repetir ingestão Bronze nem transformação Silver. Nenhum commit ou push.
+
+## Plano de evolução do score — 2026-10-04
+
+- O usuário definiu que a próxima melhoria deve reutilizar apenas as fontes e os dados locais
+  atuais. Sem novas cenas ou histórico Sentinel-2, novas profundidades SoilGrids ou extensão
+  NASA POWER nesta etapa. O custo de processamento Sentinel-2 motivou essa restrição.
+- Foram confirmadas três escolhas: Kc por fase com calendário configurável de cenário;
+  score combinado com novo componente hídrico, NDVI e NDMI, pesos provisórios 50/30/20;
+  comparação de água inicial de 25%, 50% e 75% da capacidade disponível.
+- O [plano de implementação](score_v2_implementation_plan.md) detalha opções e implicações,
+  reservatório diário superficial de 0–30 cm, estimativa de retenção, premissas de perdas,
+  persistência, tratamento de lacunas, saída semanal por cenário, checkpoints encadeados,
+  testes sintéticos, piloto local e integração aditiva. Propostas técnicas ainda não são
+  resultados implementados nem parâmetros agronômicos calibrados.
+- Calendário, Kc, p e conversão carbono/matéria orgânica ainda precisam ser especificados.
+  A condição superficial não deve ser apresentada como toda a zona radicular da soja.
+  Sem novos dados independentes, avaliar coerência e sensibilidade, sem alegar validação de campo.
+- Nesta etapa foram alterados somente documentos. Nenhum novo modelo foi implementado, nenhum
+  dado foi processado e nenhum banco foi alterado. Nenhum commit ou push.
+
+## Implementação do score v2 — 2026-10-04
+
+- Após aprovação da implementação, o usuário confirmou calendário hipotético com plantio em
+  15/10/2023 e fases de 20/30/60/30 dias. Kc 0,40/1,15/0,50, p=0,50, conversão OM=1,724,
+  profundidade fixa 0,30 m, perdas por escoamento zero e água inicial 25/50/75% estão configurados.
+- Funções puras estimam retenção Saxton–Rawls, ETc, reserva, chuva aproveitada, drenagem e Ks.
+  O componente diário 1-Ks é agregado por semana e combinado com NDVI/NDMI (50/30/20 provisórios).
+  Persistência é diagnóstico; lacuna meteorológica invalida a continuidade do ciclo.
+- CLI `gold-water-balance` reutiliza clima Silver e features Gold v1 locais, sem ler COGs ou acessar
+  fontes externas. Outputs separados, schemas com unidades, manifesto e checkpoints encadeados
+  permitem reuso íntegro e reparo após interrupção. V1 preservado.
+- Migration 004 cria `gold.soil_hydraulics`, `gold.water_stress_weekly_v2` e
+  `gold.water_stress_dashboard_v2`. Carga transacional por dataset reconcilia apenas `analysis_id`
+  carregados (upsert e remoção de chaves obsoletas). Nenhum TRUNCATE necessário.
+- Airflow tem modo `water-balance-only`: cálculo v2, gate e carga opcional das duas tabelas novas,
+  sem ingestão/transformação Sentinel-2. Deve-se reconstruir a imagem antes de usar código novo.
+- Piloto técnico: primeiras 32 células, 36 semanas, 3 cenários; 3.456 linhas (1.953 parciais,
+  63 indisponíveis por solo ausente, 1.440 fora do ciclo). Sem satélite válido nessa amostra.
+  Cenários coincidiram após chuva inicial; sem inferir isso para o estado. Execução estadual pendente.
+- PostgreSQL 17/PostGIS temporário confirmou migrations 001–004 e reaplicação, carga/repetição
+  do piloto, remoção de cenário obsoleto, isolamento de outra análise/v1 e rollback de score inválido.
+  Servidor temporário encerrado. Banco PostgreSQL do projeto não foi alterado.
+- Fórmulas, limitações, medições e comandos estão em [score_v2.md](score_v2.md).
+  Validação final: 173 testes aprovados, 1 módulo Airflow ignorado na suíte padrão, cobertura
+  89,15%; 14 testes Airflow aprovados em ambiente separado; Ruff, formatação e mypy aprovados.
+  Nenhum commit ou push foi realizado.
