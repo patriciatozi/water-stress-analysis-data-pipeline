@@ -394,3 +394,67 @@ a uma instância PostgreSQL nesta sessão. Nenhum commit ou push foi realizado.
 - Build e inicialização Docker ainda não executados: o daemon local estava desligado.
 - Instalação, autenticação, disparo, recuperação e limites estão em `docs/airflow.md`.
 - Não houve processamento de dados nem carga no PostGIS nesta etapa; nenhum commit/push.
+
+## Retomada da carga e consumo pelo dashboard — atualização 2026-10-03
+
+### Falha observada no Airflow
+
+- Na execução manual `manual__2026-10-03T21:41:19.507966+00:00`, a task `load_database` terminou
+  com código `-9` (SIGKILL), sem exceção SQL/Python. O Docker registrou evento `oom` para o
+  container Airflow no mesmo horário. Causa: o carregador anterior lia o dataset Parquet inteiro,
+  depois criava uma segunda cópia de milhões de linhas como objetos Python.
+- Antes da falha, a tabela de controle registrou cargas bem-sucedidas de `dim_spatial_grid`
+  (907.671 linhas), `crop_mask` (907.671), `soil_features` (907.671), `weather_daily` (58.563) e
+  `satellite_observation` (546.182). O Gold semanal local contém 4.839.624 linhas em 36 semanas,
+  mas não há carga Gold bem-sucedida registrada para essa tentativa.
+- Como cada dataset é transacionado e aplicado por `UPSERT`, os Silver confirmados permanecem
+  válidos; não truncar tabelas para retomar. Limpar somente a task `load_database` preserva as
+  etapas bem-sucedidas do mesmo DAG run.
+
+### Correção local do carregador
+
+- `database.loader` agora lista os arquivos em ordem estável, valida colunas e itera Parquet em
+  lotes de até 10.000 linhas. Cada lote usa `COPY` para a staging temporária e o dataset é aplicado
+  por `UPSERT` ao final da leitura, dentro da transação própria.
+- `run_database --load` usa esse caminho incremental para todos os datasets. Os caminhos antigos
+  que materializavam arquivos completos foram removidos.
+- O teste regressivo cria dois Parquet pequenos e verifica ordenação, contagem e limite de lotes.
+  Validação após a correção: `uv run pytest -q` → 111 passed, 1 skipped, cobertura 85,86%; Ruff,
+  `ruff format --check`, `mypy src` e `git diff --check` aprovados.
+- A imagem Docker ainda precisa ser reconstruída antes de limpar/reexecutar a task:
+
+  ```bash
+  docker compose --env-file .env.airflow -f compose.airflow.yml up -d --build --force-recreate airflow
+  ```
+
+  Depois, na UI, abrir o DAG run que falhou e usar **Clear** somente em `load_database`. A task
+  executa `--dataset all`; recarrega os Silver com UPSERT e inclui a Gold ao final. Manter o Mac
+  acordado durante a execução.
+
+### Próxima sessão: consumo pelo dashboard
+
+- O contrato Gold v1 e a view `gold.water_stress_dashboard` constam na migration
+  `002_gold_consumption.sql` e em `docs/implementation_guide.md`. A view expõe centróides,
+  geometria EPSG:5880, área equivalente de soja, score percentual, classe, status, peso disponível
+  e idade da observação Sentinel-2.
+- A próxima sessão deve começar confirmando o estado no PostgreSQL: se a migration 002 foi aplicada,
+  se a view existe e se a carga Gold terminou. Consultar `gold.water_stress_dashboard` por semana e
+  comparar contagem/valores com os Parquet antes de implementar o cliente visual.
+- A tecnologia, o formato do dashboard e o ambiente de execução ainda não foram escolhidos. Não
+  presumir framework; primeiro inspecionar o repositório e decidir o escopo mínimo de consumo.
+- Para agregações estaduais, ponderar o score pela área equivalente de soja e mostrar junto a
+  cobertura de área com score. Exibir `unavailable` separadamente; scores `partial` podem ter
+  combinações de pesos disponíveis diferentes.
+
+Prompt sugerido para a próxima sessão:
+
+```text
+Leia docs/first_session_context.md, docs/data_architecture.md,
+docs/implementation_guide.md e docs/airflow.md. Quero preparar a camada de consumo da Gold para
+um dashboard. Primeiro confirme o estado real do PostgreSQL: migration 002, view
+gold.water_stress_dashboard e conclusão da carga após a correção OOM descrita nesta memória.
+Depois inspecione o projeto e proponha/implemente o menor dashboard útil, respeitando o contrato
+Gold: filtro temporal semanal, status complete/partial/unavailable, cobertura e agregações
+ponderadas pela área equivalente de soja. Não presuma framework sem olhar o repositório. Não faça
+commit nem push sem autorização explícita.
+```
