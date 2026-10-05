@@ -9,6 +9,9 @@ A instalação local usa Docker Compose, Airflow 3.2.2 com Python 3.12 e `LocalE
 Um PostgreSQL separado guarda exclusivamente os metadados do Airflow; ele não é o PostGIS
 com as tabelas Bronze/Silver/Gold. As dependências geoespaciais ficam em um virtualenv separado,
 instalado com `uv.lock`, para evitar conflitos com as dependências do Airflow.
+Essa imagem também inclui o dashboard Streamlit, executado pelo serviço `dashboard` na
+porta 8501, em processo separado e com leitura direta do PostGIS. Veja o
+[guia do dashboard](dashboard.md#executar-no-docker) para iniciá-lo sozinho.
 
 Referências oficiais: [Quick Start](https://airflow.apache.org/docs/apache-airflow/stable/start.html),
 [Docker Compose](https://airflow.apache.org/docs/apache-airflow/3.2.2/howto/docker-compose/),
@@ -115,7 +118,8 @@ docker compose --env-file .env.airflow -f compose.airflow.yml exec airflow airfl
 
 As configurações e migrations são montadas somente para leitura; `data/` é compartilhado com
 os arquivos locais. Logs, autenticação e metadados ficam em volumes Docker persistentes.
-Alterações em `src/`, dependências ou Dockerfile exigem novo `build` e recriação do container.
+Alterações em `src/`, dashboard, tema, dependências ou Dockerfile exigem novo `build` e
+recriação dos containers afetados.
 Mudanças em `dags/` e `configs/` são vistas pelos serviços pelos mounts.
 
 ## Falhas e retomada

@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+dashboard = [
+    "pandas>=2.2,<3",
+    "plotly>=6,<7",
+    "pydeck>=0.9,<1",
+    "python-dotenv>=1,<2",
+    "streamlit>=1.50,<2",
+]
 dev = [
   "mypy>=1.11,<2",
   "pyarrow-stubs>=17,<24",

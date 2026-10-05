@@ -40,11 +40,29 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver `satellite_observation` | Implementada e testada localmente | NDVI/NDMI por cena e `grid_id` |
 | Camada Gold semanal | Implementada inicialmente e testada | Features climáticas, solo, soja e Sentinel-2 opcionais |
 | Persistência PostgreSQL/PostGIS | Implementada e testada com mocks | Manifestos Bronze e tabelas Silver/Gold relacionais |
+| Dashboard Streamlit | Implementado e testado | Score v1, mapas, fatores e histórico; leitura local ou PostgreSQL |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
 Os smoke tests anteriores de Sorriso continuam como evidência dos clientes, mas seus artefatos
 locais não correspondem à nova AOI estadual. A ingestão deve ser executada novamente nos novos
 caminhos particionados.
+
+## Dashboard de visualização
+
+O painel Streamlit apresenta o score provisório v1, cobertura, classes de risco, clima,
+NDVI/NDMI. Reutiliza os dados existentes, com leitura direta do PostgreSQL, sem reprocessar
+o pipeline.
+
+```bash
+uv sync --group dashboard
+uv run --group dashboard streamlit run dashboard_app.py
+```
+
+Abra `http://localhost:8501`. Consulte o [guia do dashboard](docs/dashboard.md) para conexão,
+filtros, unidades, ponderação por área e limitações.
+
+O dashboard também está incluído na imagem usada pelo Airflow, como serviço separado no
+Docker Compose. Veja os [comandos para execução no Docker](docs/dashboard.md#executar-no-docker).
 
 ## Arquitetura estadual
 

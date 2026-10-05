@@ -703,6 +703,14 @@ alterar a Bronze nem repetir a transformação Silver.
 
 ### Consumo pelo dashboard
 
+O consumidor Streamlit está implementado em `dashboard_app.py`, com leitura/validação em
+`water_stress.dashboard.data` e agregações independentes da interface em
+`water_stress.dashboard.analysis`. Usa o score v1; o balanço v2 permanece separado.
+O painel consulta diretamente o PostgreSQL, sem seleção de fonte nem fallback para arquivos.
+Também pode executar no serviço `dashboard` do Compose, compartilhando a imagem do Airflow,
+sem montar datasets locais nem iniciar os serviços de orquestração.
+Execução, conexão e regras de apresentação: [guia do dashboard](dashboard.md).
+
 - Usar `water_stress_risk_class` para a legenda de quatro níveis e `monitoring_guidance` para
   a orientação; cores, rótulos traduzidos, filtros e arredondamento pertencem à apresentação.
 - Exibir score nulo como “Sem dados suficientes”, separado de risco baixo. Se a versão da

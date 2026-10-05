@@ -550,3 +550,73 @@ commit nem push sem autorização explícita.
   Validação final: 173 testes aprovados, 1 módulo Airflow ignorado na suíte padrão, cobertura
   89,15%; 14 testes Airflow aprovados em ambiente separado; Ruff, formatação e mypy aprovados.
   Nenhum commit ou push foi realizado.
+
+## Dashboard Streamlit — 2026-10-04
+
+- Após discutir a cobertura do novo modelo, o usuário decidiu começar a visualização com
+  o score provisório anterior (v1). O balanço superficial v2 segue separado e não participa
+  do painel. Não adicionar novas fontes ou repetir o processamento Sentinel-2.
+- Implementado `dashboard_app.py`, com dependências no grupo opcional `dashboard`, tema claro,
+  mapa por centróides, classes recebidas da Gold, cobertura geral/completa, composição,
+  clima/NDVI/NDMI, evolução semanal e histórico por célula com solo e download CSV.
+- Leitura padrão pelos Parquet existentes; alternativa pela view `gold.water_stress_dashboard`,
+  em transações somente de leitura. O dashboard carrega `.env` automaticamente, sem sobrescrever
+  variáveis do ambiente. Não executa migrations, carga, TRUNCATE ou transformações.
+- Agregações ponderadas pela área equivalente de soja; cada fator preserva seu denominador
+  disponível. Ausências não viram zero. Filtros de classe/composição afetam apenas o mapa;
+  o recorte geográfico afeta os indicadores. Os gráficos mantêm lacunas temporais.
+- Verificada leitura local e PostgreSQL do projeto na semana inicial do painel: 134.434 células,
+  score médio ponderado 0,0406003862 e cobertura de score de 100%, com resultados equivalentes.
+  O banco foi apenas consultado; nenhum dado local foi reprocessado.
+- Instruções e limitações em [dashboard.md](dashboard.md). Iniciar com
+  `uv run --group dashboard streamlit run dashboard_app.py`. Nenhum commit ou push.
+- Validação: 194 testes aprovados, 1 módulo Airflow ignorado na suíte padrão, cobertura
+  89,80%; Ruff, formatação e mypy aprovados. Interface verificada no Chrome local.
+- A seleção por clique mostrou instabilidade no mapa estadual durante o teste. A primeira
+  versão consulta o histórico pelo `grid_id` exibido no marcador, em “Análise por célula”.
+
+### Ajustes da visão geral
+
+- Título “estresse hídrico e recomendação de irrigação na soja” e subtítulo “Estado do Mato
+  Grosso”. Removidos o aviso de janela parcial e o resumo de células/área abaixo dos indicadores.
+- “mapa de riscos” reúne classes e completude no filtro Categorias, com classes em verde e
+  Completo/Parcial em amarelo. Classes se combinam com completude quando selecionada; o padrão
+  não restringe completude, preservando a exibição de Sem score.
+- Classificação não publicada aparece junto a Sem score no mapa/distribuição, sem alterar
+  a Gold nem descartar scores numéricos existentes. Composição dos resultados mostra apenas
+  as áreas Completo/Parcial, sem médias de score nessa seção.
+
+### Simplificação e sincronização dos filtros
+
+- Preservadas as alterações manuais de título, subtítulo, legendas e navegação com Visão geral
+  e Sobre o indicador. Removido o cartão Área com score.
+- Sem score deixou de ser uma categoria disponível. O mapa e a distribuição por classe
+  exibem apenas classificações publicadas, inclusive ao filtrar só por completude.
+- Área por classe e a legenda do mapa agregam a área equivalente das mesmas células filtradas,
+  em vez de usar a distribuição da semana inteira. Seleção vazia não mantém áreas antigas.
+- Composição ganhou uma descrição curta dos completos/parciais e mantém as áreas da semana,
+  assim como os cartões superiores e os demais fatores. Sem alterações no banco ou na Gold.
+
+### Leitura exclusiva do PostgreSQL e explicação do score
+
+- O dashboard passou a consultar exclusivamente `gold.water_stress_dashboard`, sem seletor
+  de fonte na barra lateral nem fallback para Parquet em caso de falha de conexão.
+- A visão geral ganhou uma explicação destacada logo abaixo dos três cartões, descrevendo
+  a escala 0–100, o risco semanal e os componentes déficit hídrico, NDVI e NDMI do score v1.
+- Mantidas consultas somente de leitura, cache de cinco minutos e atualização manual pelo
+  botão Atualizar leitura. Nenhuma alteração de tabelas, migration, TRUNCATE, commit ou push.
+- Removida a opção Mapa de fundo; a base cartográfica CARTO permanece sempre habilitada.
+- ETo, NDVI e NDMI na explicação do score ganharam tooltips em linguagem simples, disponíveis
+  ao passar o mouse ou focar pelo teclado.
+
+### Dashboard na imagem Docker
+
+- A imagem `water-stress-pipeline:local` inclui dependências do grupo dashboard, a aplicação
+  e o tema Streamlit. Airflow e dashboard compartilham a imagem em serviços separados.
+- O serviço dashboard lê as credenciais de `.env` em tempo de execução, usa o host configurado
+  em `.env.airflow` e publica somente em `127.0.0.1:8501`. Monta apenas configurações para leitura,
+  sem datasets locais nem dependência do banco de metadados do Airflow.
+- Compose validado e imagem construída. Um container temporário confirmou o healthcheck e
+  a renderização do painel com o PostgreSQL: score médio 4,1 e cobertura completa de 12,0%.
+- Suíte: 193 testes aprovados, 1 ignorado, cobertura de 89,80%; Ruff, formatação e mypy aprovados.
+  Comandos no guia do dashboard. Nenhuma carga, migration, commit ou push.

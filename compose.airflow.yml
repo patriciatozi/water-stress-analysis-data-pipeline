@@ -1,5 +1,11 @@
 name: water-stress-airflow
 
+x-pipeline-image: &pipeline-image
+  image: water-stress-pipeline:local
+  build:
+    context: .
+    dockerfile: deployment/airflow/Dockerfile
+
 services:
   metadata-db:
     image: postgres:16-alpine
@@ -17,9 +23,7 @@ services:
     restart: unless-stopped
 
   airflow:
-    build:
-      context: .
-      dockerfile: deployment/airflow/Dockerfile
+    <<: *pipeline-image
     command: standalone
     working_dir: /opt/project
     env_file:
@@ -57,6 +61,37 @@ services:
       retries: 5
     restart: unless-stopped
     stop_grace_period: 60s
+
+  dashboard:
+    <<: *pipeline-image
+    init: true
+    entrypoint: [/opt/pipeline-venv/bin/streamlit]
+    command:
+      - run
+      - dashboard_app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.fileWatcherType=none
+    working_dir: /opt/project
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WATER_STRESS_DATABASE__ENABLED: "true"
+      WATER_STRESS_DATABASE__HOST: ${AIRFLOW_PIPELINE_DATABASE_HOST:-host.docker.internal}
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - ./configs:/opt/project/configs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://localhost:8501/_stcore/health]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   airflow-metadata:
