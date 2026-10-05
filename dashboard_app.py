@@ -207,7 +207,7 @@ def render_metrics(summary: WeeklySummary) -> None:
 def render_score_description() -> None:
     st.html("""
         <div class="score-description">
-            <strong>O que o score indica</strong>
+            <strong>Como o score é composto?</strong>
             <p>Estimativa semanal do risco de estresse hídrico da soja, de 0 a 100:
             quanto maior o valor, maior o risco. Combina déficit entre
             <span class="score-term" tabindex="0" aria-describedby="eto-description">ETo<span
