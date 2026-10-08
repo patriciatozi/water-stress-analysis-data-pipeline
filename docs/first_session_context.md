@@ -3,6 +3,80 @@
 > Documento portátil para retomar o projeto em outra sessão ou compartilhar o contexto com o
 > ChatGPT Web. Atualize-o quando houver mudanças relevantes de escopo, arquitetura ou estado.
 
+## Retomada rápida — encerramento da sessão de 2026-10-04
+
+Resumo atual para iniciar o próximo chat:
+
+- Dashboard Streamlit implementado em `dashboard_app.py`; documentação em
+  [dashboard.md](dashboard.md). Usa exclusivamente o PostgreSQL e a view
+  `gold.water_stress_dashboard`, com consultas somente de leitura e cache de cinco minutos.
+- O indicador exibido é o score provisório **v1**, semanal: déficit entre ETo e chuva, NDVI e
+  NDMI, com pesos padrão 50/30/20 e apresentação em 0–100. V2 permanece experimental e separado.
+  Manter as fontes existentes, sem novas ingestões ou reprocessamento Sentinel-2.
+- Navegação atual: Visão geral e Sobre o indicador. Preservar alterações manuais do usuário.
+  O título é “Estresse hídrico e recomendação de irrigação na soja” e o subtítulo é
+  “Região: Estado do Mato Grosso”.
+- Cartões: Score médio, Área em alto ou crítico e Área com score completo. Logo abaixo,
+  a explicação destacada tem o título atual “Como o score é composto?”, alterado manualmente
+  pelo usuário, com tooltips de ETo, NDVI e NDMI para mouse e teclado.
+- Categorias reúne Baixo/Atenção/Alto/Crítico em verde e Completo/Parcial em amarelo.
+  Sem score e classificação pendente não entram no mapa nem na distribuição por classe.
+  Mapa e Área por classe usam as mesmas células filtradas; cartões, composição e fatores
+  mantêm a semana inteira. Composição mostra apenas Completo/Parcial com descrição curta.
+  A base cartográfica CARTO fica sempre habilitada, sem opção Mapa de fundo.
+- Docker: `compose.airflow.yml` tem serviços Airflow e dashboard separados, usando a mesma
+  imagem `water-stress-pipeline:local`, construída por `deployment/airflow/Dockerfile`.
+  O dashboard usa credenciais de `.env`, host de `.env.airflow` e montagem de `configs/` para
+  leitura; não monta datasets. Nenhum segredo é copiado para a imagem.
+
+Estado operacional confirmado no encerramento:
+
+| Componente | Estado |
+|---|---|
+| Streamlit local | Encerrado; processo iniciado nos testes foi desligado |
+| Container `dashboard` | Parado com `docker compose ... stop dashboard`; porta 8501 livre |
+| Container `airflow` | Parado |
+| Container `metadata-db` | Parado |
+
+Containers, imagens e volumes foram preservados. Nenhuma migration, carga, TRUNCATE ou
+alteração dos dados foi executada nesta etapa.
+Após o pedido final do usuário, todos os serviços do projeto foram parados com
+`docker compose --env-file .env.airflow -f compose.airflow.yml stop`.
+Verificação final: Airflow, dashboard e PostgreSQL de metadados com estado `exited`;
+nenhum container Docker em execução.
+
+Para retomar todos os serviços:
+
+```bash
+docker compose --env-file .env.airflow -f compose.airflow.yml up -d
+```
+
+Para iniciar novamente o dashboard, na raiz do projeto:
+
+```bash
+docker compose --env-file .env.airflow -f compose.airflow.yml up -d dashboard
+```
+
+Abra `http://localhost:8501`. Se modificar a aplicação, o tema, dependências ou código,
+use `up -d --build dashboard`. Para parar novamente apenas o painel:
+
+```bash
+docker compose --env-file .env.airflow -f compose.airflow.yml stop dashboard
+```
+
+Estado de código e verificação:
+
+- HEAD observado: `46dd06a` (`refactor: alterando titulo de text box no dashboard`). O repositório
+  estava sem alterações pendentes antes desta atualização do contexto. Nenhum commit ou push
+  foi realizado pelo assistente; manter essa restrição no próximo chat até nova autorização.
+- Última validação realizada pelo assistente antes das alterações manuais posteriores:
+  193 testes aprovados, 1 ignorado, cobertura de 89,80%; Ruff, formatação e mypy aprovados.
+  Build Docker, healthcheck, leitura PostgreSQL e renderização no container foram verificados.
+- Pendência observada para a próxima rodada de ajustes: o teste da descrição em
+  `tests/test_dashboard.py` e a referência em `docs/dashboard.md` ainda usam o título anterior
+  “O que o score indica”. Sincronizar com “Como o score é composto?” antes da próxima validação.
+  Nesta etapa de encerramento, somente o arquivo de contexto foi editado; a suíte não foi repetida.
+
 ## Estado atual
 
 O projeto implementa um pipeline acadêmico e reprodutível para integrar meteorologia, solo, uso da
