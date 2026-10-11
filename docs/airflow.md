@@ -24,18 +24,26 @@ Esse ambiente é destinado à execução local. Para processamento estadual, res
 | Parâmetro `mode` | Operações | Pré-requisitos |
 |---|---|---|
 | `gold-only` (padrão) | Gold → validação → publicação opcional | Silver já processada |
-| `water-balance-only` | Balanço diário → Gold v2 semanal → validação → publicação opcional | Clima diário Silver, Gold v1 completa e dimensão espacial no banco para carga |
 | `satellite-gold` | Sentinel-2 Silver → Gold → validação → publicação opcional | Catálogo Bronze, grade, máscara, solo e clima Silver |
 | `full` | Bronze → Silver → Gold → validação → publicação opcional | Acesso às fontes externas |
 
 `load_database=false` publica somente os arquivos. Com `true`, executa migrations, registra
 manifestos Bronze e carrega todas as tabelas Silver/Gold em ordem de dependência. Isso requer
 PostgreSQL/PostGIS configurado e habilitado em `.env`, e disponibilidade de todos os datasets Silver.
-No modo `water-balance-only`, a publicação habilitada aplica migrations e carrega somente
-`soil_hydraulics` e `water_stress_weekly_v2`. Não registra Bronze nem recarrega Silver/v1.
-Esse modo executa todo o estado: revisar primeiro o [piloto via CLI e seus limites](score_v2.md).
 O carregador lê os Parquet em lotes de até 10 mil linhas e confirma cada dataset em uma transação,
 mantendo o uso de memória do cliente limitado e permitindo repetir a carga com segurança.
+
+O DAG usa o score original `academic-index-v1` e mantém as mesmas 18 tarefas da primeira
+execução local. O ramo experimental v2 e o modo `water-balance-only` foram removidos da
+orquestração. O [piloto v2](score_v2.md) continua disponível somente pelos CLIs explícitos;
+os arquivos e tabelas já existentes são preservados.
+
+Na AWS, `WATER_STRESS_DASHBOARD__SOURCE=s3` acrescenta somente a tarefa `publish_dashboard`
+após `select_publication`, protegida por `validate_gold`. Esse ramo substitui a carga no
+PostgreSQL, independentemente de `load_database`. Local mantém as 18 tarefas originais;
+AWS tem 19, sem tarefas v2. Para os arquivos existentes, disparar `gold-only` com
+`load_database=false`: a Gold reutiliza checkpoints válidos e publica no S3.
+Detalhes de credenciais, publicação e cache: [implantação AWS](aws_deployment.md).
 
 O processamento completo respeita estas dependências:
 

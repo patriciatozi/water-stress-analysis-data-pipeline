@@ -3,6 +3,8 @@
 .env
 .env.*
 data
+.deployment
+.dashboard-cache
 __pycache__
 .pytest_cache
 .mypy_cache

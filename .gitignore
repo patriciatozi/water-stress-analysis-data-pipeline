@@ -225,4 +225,7 @@ data/**
 
 # Local Airflow credentials and generated state
 .env.airflow
+.env.aws
+.deployment/
+.dashboard-cache/
 .airflow/

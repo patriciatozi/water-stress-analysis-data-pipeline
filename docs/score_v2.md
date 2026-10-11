@@ -158,9 +158,10 @@ hidráulicas de assinatura compatível. `--dataset all` mantém compatibilidade 
 quando existe publicação `full`, inclui as duas tabelas novas. Para pilotos use nomes explícitos.
 
 Após revisar o piloto e o custo, gerar toda a área retirando `--max-cells`. A carga e o gate também
-devem retirar essa opção; o escopo full é distinto do piloto. Airflow oferece `water-balance-only`
-para esse processamento local completo, sem ingestão ou transformação de satélite. Reconstruir
-a imagem para incorporar código novo. A execução estadual ainda não foi realizada nesta entrega.
+devem retirar essa opção; o escopo full é distinto do piloto. O processamento v2 é explícito
+pelos CLIs acima, sem ingestão ou transformação de satélite. O ramo `water-balance-only` foi
+removido do Airflow para manter a orquestração do score v1 original.
+A execução estadual ainda não foi realizada nesta entrega.
 
 No dashboard, selecionar **um `analysis_id`, uma semana e um cenário**. Não somar áreas ou misturar
 linhas de cenários/piloto/full. Exibir camada de 30 cm, calendário de cenário, status, cobertura,

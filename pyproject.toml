@@ -15,6 +15,7 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "rasterio>=1.4,<2",
   "shapely>=2.0,<3",
+  "boto3>=1.40,<2",
 ]
 
 [dependency-groups]

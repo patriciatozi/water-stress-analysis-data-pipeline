@@ -1,5 +1,71 @@
 # Memória de desenvolvimento — Water Stress Analysis Data Pipeline
 
+## Dashboard AWS alimentado pelo S3 — 2026-10-10
+
+- Local mantém PostgreSQL; AWS usa `WATER_STRESS_DASHBOARD__SOURCE=s3`, com bucket/prefixo/região
+  em `WATER_STRESS_DASHBOARD__LOCATION__*`. O bucket continua privado e o SDK oficial Boto3
+  usa `LabRole` pela cadeia de credenciais, sem copiar chaves. IMDSv2 permanece obrigatório,
+  com hop limit 2 para os containers conforme a recomendação AWS.
+- Implementados `dashboard.s3_cache` e `pipelines.run_dashboard_publication`: publica somente
+  grade Silver, Gold v1 e metadados/schema/qualidade; verifica inventário, estudo e SHA-256.
+  Manifesto por revisão imutável e `current.json` publicado por último. Snapshots Bronze/Silver/
+  Gold originais permanecem separados; não apagar o bucket para repetir a execução.
+- Dashboard usa cache em volume Docker próprio, sem montar os dados de processamento nem
+  consultar PostgreSQL. Downloads interrompidos retomam arquivos verificados; promoção por
+  rename somente após conclusão. Ponteiro consultado com cache de até 60 s; botão Atualizar
+  leitura força nova consulta. Não há fallback entre fontes nem limpeza automática de revisões.
+- DAG local mantém as 18 tarefas v1; AWS acrescenta apenas `publish_dashboard` após o gate.
+  Execução `validation_s3_v1_20261011` terminou com sucesso em `gold-only`, publicação S3 e
+  `load_database=false`; ingestão, transformação Silver e carga relacional foram ignoradas.
+  A pausa original do DAG foi restaurada depois do teste.
+- Publicação final: 41 arquivos, 143.755.448 bytes, 36 semanas, snapshot
+  `40939c03101c8b9aa741d11e87ed15556b6473bcfec4cfba9586c4340b1a6f72`.
+  Parquet lido por semana mantém 134.434 células e scores 54,9 / 4,1 / 33,3 nas semanas
+  inicial / padrão / final, com indicadores equivalentes aos anteriores.
+- PostGIS antigo da EC2 parado e autoinício desabilitado; volume preservado. PostgreSQL de
+  metadados do Airflow continua ligado. Nenhuma consulta ao banco ocorreu no teste de interface,
+  que também bloqueou `_query`. Navegador validou mapa, Sobre, filtro Completo e troca de semanas,
+  sem erros JavaScript. Capturas/relatórios em `.deployment/`, ignorado pelo Git.
+- 237 testes padrão aprovados, 1 módulo Airflow ignorado, cobertura 90,50%; 14 testes específicos
+  com Airflow real aprovados. Ruff, formatação e mypy aprovados. EC2 já estava ligada e permanece
+  ligada para acesso; parar pelo helper ao terminar. Sem commit/push nem alteração do banco local.
+
+## Retorno do DAG ao fluxo v1 — 2026-10-10
+
+- Restauradas as 18 tarefas e os três modos do DAG da primeira execução local:
+  `full`, `satellite-gold` e `gold-only` (padrão), com publicação opcional no banco.
+- Removidos da orquestração o modo `water-balance-only` e suas seis tarefas de cálculo,
+  validação e publicação do balanço superficial v2. O score `academic-index-v1` já estava
+  preservado no fluxo original e no dashboard; nenhuma fórmula foi alterada.
+- Os CLIs experimentais v2, arquivos, tabelas e histórico das execuções são preservados.
+  Esta alteração não executa ingestão, transformação ou carga de dados.
+- Validação: DAG idêntico ao commit inicial `3bbda45`; 222 testes padrão aprovados,
+  1 módulo Airflow ignorado e cobertura 90,17%. Os 12 testes específicos passaram com
+  Airflow 3.2.2 real. Ruff, formatação, mypy e `git diff --check` aprovados.
+- O Airflow local reconheceu as 18 tarefas sem erros de importação, pelo mount existente;
+  não foi necessário rebuild. A cópia do DAG na EC2 ainda não foi sincronizada nesta alteração.
+
+## Infraestrutura local/AWS — 2026-10-07
+
+- Implementado `python -m water_stress.pipelines.run_infrastructure --infra local|aws` com
+  `up`, `stop`, `status`, `load`, `publish-data` e `fetch-data`.
+- AWS reaproveita Compose e acrescenta PostGIS em `compose.aws.yml`; execução ocorre no host
+  EC2. Não provisiona recursos. Passo a passo em [aws_deployment.md](aws_deployment.md).
+- S3 guarda snapshots dos arquivos existentes Bronze/Silver/Gold, com inventário SHA-256 e
+  manifesto publicado ao final. Restore valida bytes, recusa conflitos e permite retomada.
+  O pipeline continua usando filesystem na EC2; não há `StorageClient` S3 direto.
+- `load` usa as migrations/cargas atuais, sem nova ingestão, processamento Sentinel-2 ou
+  recálculo de scores. Dashboard mantém v1 e o piloto v2 permanece separado.
+- `.env.aws` e `.deployment/` são ignorados pelo Git; nenhum segredo ou dado entrou no código.
+- Sincronizada a referência ao título manual “Como o score é composto?” no teste e na documentação.
+- Verificação: 221 testes aprovados, 1 módulo Airflow ignorado; cobertura 90,17%; Ruff,
+  formatação e mypy aprovados. Compose local/AWS e build da imagem atual validados.
+- Docker isolado confirmou healthchecks dos quatro serviços, migrations 001–004, carga/repetição
+  de seis datasets sintéticos e leitura PostgreSQL pelo dashboard. Containers, volumes e rede
+  do teste foram removidos; os serviços existentes foram preservados.
+- Nenhum recurso foi criado na AWS, upload real realizado, commit ou push efetuado.
+  Os testes Docker usam um projeto separado e dados sintéticos, sem alterar os serviços existentes.
+
 > Documento portátil para retomar o projeto em outra sessão ou compartilhar o contexto com o
 > ChatGPT Web. Atualize-o quando houver mudanças relevantes de escopo, arquitetura ou estado.
 
@@ -612,7 +678,8 @@ commit nem push sem autorização explícita.
 - Migration 004 cria `gold.soil_hydraulics`, `gold.water_stress_weekly_v2` e
   `gold.water_stress_dashboard_v2`. Carga transacional por dataset reconcilia apenas `analysis_id`
   carregados (upsert e remoção de chaves obsoletas). Nenhum TRUNCATE necessário.
-- Airflow tem modo `water-balance-only`: cálculo v2, gate e carga opcional das duas tabelas novas,
+- Naquela implementação, Airflow recebeu o modo `water-balance-only` (removido em 10/10/2026):
+  cálculo v2, gate e carga opcional das duas tabelas novas,
   sem ingestão/transformação Sentinel-2. Deve-se reconstruir a imagem antes de usar código novo.
 - Piloto técnico: primeiras 32 células, 36 semanas, 3 cenários; 3.456 linhas (1.953 parciais,
   63 indisponíveis por solo ausente, 1.440 fora do ciclo). Sem satélite válido nessa amostra.
@@ -694,3 +761,27 @@ commit nem push sem autorização explícita.
   a renderização do painel com o PostgreSQL: score médio 4,1 e cobertura completa de 12,0%.
 - Suíte: 193 testes aprovados, 1 ignorado, cobertura de 89,80%; Ruff, formatação e mypy aprovados.
   Comandos no guia do dashboard. Nenhuma carga, migration, commit ou push.
+
+### Implantação real no AWS Academy Learner Lab — 10/10/2026
+
+- Criados S3 privado e EC2 Ubuntu 24.04 `t3.large`, em `us-east-1`, com EBS gp3 de 40 GiB
+  criptografado e `LabInstanceProfile`. Acesso às aplicações por túnel SSH; regra SSH restrita
+  ao IP do operador. Usadas as credenciais temporárias do perfil `learner-lab` somente na máquina
+  local; a EC2 acessa S3 pelo papel do laboratório.
+- Publicados/restaurados 1.687 arquivos (cerca de 1,3 GB), com checksums conferidos e reutilização
+  do snapshot testada. Nenhuma ingestão ou transformação repetida. Criado PostGIS na EC2,
+  aplicadas migrations 001–004, registrados 391 manifestos e carregados os seis datasets v1,
+  incluindo 4.839.624 registros Gold em 36 semanas.
+- Indicadores da primeira e da última semana conferidos com os Parquet locais; repetir a carga
+  de clima manteve 58.563 registros. AppTest com PostgreSQL real e testes no navegador validaram
+  visão geral, Sobre, filtro Completo e troca de semanas. Airflow autenticado, DAG pausado,
+  zero erros de importação e zero execuções.
+- Executado `ANALYZE` após a carga. A consulta de semanas passou a ler a tabela Gold diretamente,
+  preservando os filtros e a equivalência garantida pela chave estrangeira para a grade.
+  Isso remove o join espacial desnecessário na navegação; indicadores continuam pela view.
+  Consulta medida em cerca de 1,7 s no modo Standard. Incluído teste de regressão.
+- Parar/ligar a mesma EC2 e reabrir o túnel pelo novo IP funcionou; serviços e dashboard
+  voltaram saudáveis. Estado, chave SSH, comandos de acesso, relatórios e capturas ficam em
+  `.deployment/`, ignorado pelo Git. Guia reproduzível: [aws_deployment.md](aws_deployment.md).
+- Suíte: 222 testes aprovados, 1 ignorado, cobertura de 90,17%; Ruff, formatação e mypy aprovados.
+  Sem commit ou push. Containers e dados locais preservados.

@@ -14,3 +14,4 @@ COPY --chown=airflow:0 dashboard_app.py ./
 COPY --chown=airflow:0 .streamlit ./.streamlit
 COPY --chown=airflow:0 configs ./configs
 COPY --chown=airflow:0 migrations ./migrations
+RUN mkdir -p /opt/project/.dashboard-cache

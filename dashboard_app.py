@@ -27,6 +27,7 @@ from water_stress.dashboard.analysis import (
     summarize,
 )
 from water_stress.dashboard.data import DashboardReader, DataSource
+from water_stress.dashboard.s3_cache import DashboardStorageSettings, fetch_dashboard
 from water_stress.transformation import gold_weekly
 
 LOGGER = logging.getLogger(__name__)
@@ -100,6 +101,13 @@ def number(value: float | None, decimals: int = 1, suffix: str = "") -> str:
 @st.cache_data(ttl=300, max_entries=2, show_spinner=False)
 def cached_grid(_settings: Settings, identity: str) -> pa.Table:
     return DashboardReader(_settings).spatial_grid()
+
+
+@st.cache_data(ttl=60, max_entries=2, show_spinner=False)
+def cached_s3_settings(
+    _settings: Settings, config: DashboardStorageSettings, identity: str
+) -> Settings:
+    return fetch_dashboard(_settings, config)
 
 
 @st.cache_data(ttl=300, max_entries=3, show_spinner=False)
@@ -582,8 +590,16 @@ def main() -> None:
     with st.sidebar:
         st.subheader("Explorar os dados")
     source: DataSource = "postgres"
-    reader = DashboardReader(settings, source)
+    storage: DashboardStorageSettings | None = None
     try:
+        storage = DashboardStorageSettings()
+        if storage.source == "s3":
+            with st.spinner("Lendo a publicação do S3…"):
+                settings = cached_s3_settings(
+                    settings, storage, str(settings.study.model_dump()) + settings.config_hash
+                )
+            source = "parquet"
+        reader = DashboardReader(settings, source)
         weeks = reader.weeks()
         identity = reader.fingerprint() + str(settings.study.model_dump()) + settings.config_hash
         with st.sidebar:
@@ -602,6 +618,7 @@ def main() -> None:
 
             if st.button("Atualizar leitura", width="stretch"):
                 st.cache_data.clear()
+                st.rerun()
             st.caption(
                 f"Período: {settings.study.start_date:%d/%m/%Y} a "
                 f"{settings.study.end_date:%d/%m/%Y}"
@@ -630,7 +647,7 @@ def main() -> None:
             render_method(reader)
         st.divider()
         st.caption("Fontes: NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE.")
-    except (ValueError, FileNotFoundError, DatabaseError, pa.ArrowInvalid) as error:
+    except (ValueError, OSError, RuntimeError, DatabaseError, pa.ArrowInvalid) as error:
         LOGGER.error(
             "Dashboard read failed",
             extra={
@@ -640,11 +657,23 @@ def main() -> None:
                 "error_type": type(error).__name__,
             },
         )
-        st.error(
-            "Não foi possível ler o PostgreSQL. Confira a conexão no .env, "
-            "WATER_STRESS_DATABASE__ENABLED=true, as migrations 001-003 e a carga da Gold v1. "
-            "O dashboard não migra nem carrega tabelas."
-        )
+        if storage is None:
+            st.error(
+                "Configuração inválida da fonte do dashboard; confira "
+                "WATER_STRESS_DASHBOARD__SOURCE e a localização S3."
+            )
+        elif storage.source == "s3":
+            st.error(
+                "Não foi possível ler a publicação do S3. Confira o bucket, o prefixo, "
+                "a role da EC2, a publicação da Gold v1 e o espaço do cache. "
+                "O dashboard não usa PostgreSQL neste modo."
+            )
+        else:
+            st.error(
+                "Não foi possível ler o PostgreSQL. Confira a conexão no .env, "
+                "WATER_STRESS_DATABASE__ENABLED=true, as migrations 001-003 e a carga da Gold v1. "
+                "O dashboard não migra nem carrega tabelas."
+            )
 
 
 if __name__ == "__main__":

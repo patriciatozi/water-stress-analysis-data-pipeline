@@ -50,7 +50,6 @@ def test_publication_is_blocked_by_quality_failure() -> None:
         ("full", "ingest_ibge"),
         ("satellite-gold", "transform_satellite"),
         ("gold-only", "transform_gold"),
-        ("water-balance-only", "transform_water_balance"),
     ],
 )
 def test_modes_select_existing_entries(
@@ -90,19 +89,58 @@ def test_dag_can_be_serialized() -> None:
     assert serialized["dag"]["dag_id"] == "water_stress_pipeline"
 
 
-def test_water_balance_reuses_local_features_without_satellite_processing() -> None:
-    assert DAG.get_task("transform_water_balance").upstream_task_ids == {"select_mode"}
-    assert DAG.get_task("validate_water_balance").upstream_task_ids == {"transform_water_balance"}
-    assert DAG.get_task("select_water_publication").upstream_task_ids == {"validate_water_balance"}
-    assert DAG.get_task("load_water_balance").upstream_task_ids == {"migrate_water_balance"}
-    assert "--dataset water_stress_weekly_v2" in DAG.get_task("load_water_balance").bash_command
+def test_dag_contains_only_original_v1_tasks() -> None:
+    assert set(DAG.task_ids) == {
+        "select_mode",
+        "ingest_ibge",
+        "ingest_weather",
+        "ingest_soil",
+        "ingest_crop",
+        "ingest_satellite",
+        "transform_grid",
+        "transform_crop",
+        "transform_soil",
+        "transform_weather",
+        "transform_satellite",
+        "transform_gold",
+        "validate_gold",
+        "select_publication",
+        "migrate_database",
+        "register_bronze",
+        "load_database",
+        "files_complete",
+    }
+    assert DAG.get_task("select_mode").downstream_task_ids == {
+        "ingest_ibge",
+        "transform_satellite",
+        "transform_gold",
+    }
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_water_publication_is_optional(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
-    callback = NAMESPACE["select_water_publication"]
-    monkeypatch.setitem(
-        callback.__globals__, "get_current_context", lambda: {"params": {"load_database": enabled}}
+def test_removed_water_balance_mode_is_rejected() -> None:
+    from airflow.sdk.exceptions import ParamValidationError
+
+    with pytest.raises(ParamValidationError):
+        DAG.params.get_param("mode").resolve("water-balance-only")
+
+
+@pytest.mark.parametrize("load_database", [False, True])
+def test_aws_publishes_s3_after_quality_without_loading_database(
+    monkeypatch, load_database
+) -> None:
+    monkeypatch.setenv("WATER_STRESS_DASHBOARD__SOURCE", "s3")
+    namespace = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "dags/water_stress_pipeline.py")
     )
-    expected = "migrate_water_balance" if enabled else "water_balance_files_complete"
-    assert callback() == expected
+    cloud_dag = namespace["dag"]
+    monkeypatch.setitem(
+        namespace["select_publication"].__globals__,
+        "get_current_context",
+        lambda: {"params": {"load_database": load_database}},
+    )
+    assert namespace["select_publication"]() == "publish_dashboard"
+    assert len(cloud_dag.tasks) == 19
+    assert cloud_dag.get_task("publish_dashboard").upstream_task_ids == {"select_publication"}
+    assert cloud_dag.get_task("select_publication").upstream_task_ids == {"validate_gold"}
+    assert "run_dashboard_publication" in cloud_dag.get_task("publish_dashboard").bash_command
+    assert not any("water_balance" in task.task_id for task in cloud_dag.tasks)

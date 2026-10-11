@@ -1,0 +1,41 @@
+# Apply after compose.airflow.yml; requires Docker Compose >= 2.24.4.
+services:
+  postgis:
+    image: postgis/postgis:17-3.5
+    profiles: [database]
+    environment:
+      POSTGRES_DB: ${WATER_STRESS_DATABASE__NAME:?Configure the database name}
+      POSTGRES_USER: ${WATER_STRESS_DATABASE__USER:?Configure the database user}
+      POSTGRES_PASSWORD: ${WATER_STRESS_DATABASE__PASSWORD:?Configure the database password}
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow:
+    env_file: !override
+      - path: ${WATER_STRESS_DEPLOYMENT_ENV_FILE:-.env.aws}
+        required: true
+    environment:
+      WATER_STRESS_DATABASE__ENABLED: "false"
+      WATER_STRESS_DATABASE__HOST: postgis
+      WATER_STRESS_DASHBOARD__SOURCE: s3
+
+  dashboard:
+    env_file: !override
+      - path: ${WATER_STRESS_DEPLOYMENT_ENV_FILE:-.env.aws}
+        required: true
+    environment:
+      WATER_STRESS_DATABASE__ENABLED: "false"
+      WATER_STRESS_DATABASE__HOST: postgis
+      WATER_STRESS_DASHBOARD__SOURCE: s3
+    volumes:
+      - dashboard-cache:/opt/project/.dashboard-cache
+
+volumes:
+  postgis-data:
+  dashboard-cache:

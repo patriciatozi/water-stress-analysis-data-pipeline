@@ -47,14 +47,15 @@ docker compose --env-file .env.airflow -f compose.airflow.yml logs --tail 100 da
 docker compose --env-file .env.airflow -f compose.airflow.yml stop dashboard
 ```
 
-O dashboard monta somente `configs/`, para leitura; não precisa montar os dados Bronze,
+No modo local, o dashboard monta somente `configs/`, para leitura; não precisa montar os dados Bronze,
 Silver ou Gold. Alterações na interface, tema, código ou dependências exigem reconstruir a
 imagem e recriar o serviço com `up -d --build dashboard`. O healthcheck verifica o servidor
 Streamlit; a disponibilidade dos dados é informada na própria interface.
 
 ## Leitura do PostgreSQL
 
-O dashboard consulta exclusivamente a view `gold.water_stress_dashboard` no PostgreSQL,
+Por padrão (`WATER_STRESS_DASHBOARD__SOURCE=postgres`), o dashboard lê os indicadores pela
+view `gold.water_stress_dashboard` no PostgreSQL,
 no período e na resolução configurados. Não há seletor de fonte nem leitura alternativa de
 arquivos locais quando a conexão falha. São necessários banco habilitado, migrations 001–003
 e carga da Gold v1. As consultas são parametrizadas, em transações somente de leitura,
@@ -70,16 +71,43 @@ Se a Gold já possui o contrato atual, basta iniciar a aplicação. Dados antigo
 não entram no mapa/distribuição por classe; a interface não infere uma nova classe. A atualização usa
 os comandos Gold existentes, descritos no guia de implementação.
 
-## Navegação
+## Leitura do S3 na AWS
+
+A fonte é escolhida por configuração de ambiente, sem seletor na interface. Na AWS, definir:
+
+```dotenv
+WATER_STRESS_DASHBOARD__SOURCE=s3
+WATER_STRESS_DASHBOARD__LOCATION__BUCKET=SEU_BUCKET
+WATER_STRESS_DASHBOARD__LOCATION__PREFIX=water-stress/dashboard
+WATER_STRESS_DASHBOARD__LOCATION__REGION=us-east-1
+```
+
+O painel lê `current.json`, baixa a grade Silver e a Gold v1 para `.dashboard-cache/`, verifica
+SHA-256/tamanhos e só promove o diretório depois de todos os arquivos estarem completos.
+Os arquivos publicados preservam os schemas, unidades, CRS, grãos, partições e metadados dos
+datasets originais. A associação por `grid_id` e os resumos são os mesmos do leitor Parquet.
+Não consulta PostgreSQL nem os arquivos de processamento da EC2 nesse modo.
+
+O cache é persistente em um volume Docker separado. Downloads interrompidos retomam arquivos
+já verificados; revisões completas são reutilizadas. O ponteiro S3 é consultado por até 60 s
+de cache da aplicação; “Atualizar leitura” força a consulta imediatamente. A role da EC2 acessa
+o bucket privado via SDK, sem credenciais copiadas para a imagem. Veja [AWS](aws_deployment.md).
+
+## Navegação e indicadores
 
 - **Visão geral:** score médio, área em alto/crítico, cobertura de score completo, explicação
   destacada do score, mapa com detalhes, distribuição por classe, composição e fatores da semana.
 - **Sobre o indicador:** premissas, classes, parâmetros e limitações do método.
 
-Em **O que o score indica**, ETo, NDVI e NDMI têm explicações curtas ao passar o mouse ou
+Em **Como o score é composto?**, ETo, NDVI e NDMI têm explicações curtas ao passar o mouse ou
 focar as siglas com o teclado.
 
-A seleção semanal usa somente semanas disponíveis no banco. O intervalo de datas apresentado respeita
+A seleção semanal no modo PostgreSQL consulta `gold.water_stress_weekly`, com o mesmo filtro de período e grade.
+A chave estrangeira da Gold para a dimensão espacial garante as mesmas semanas da view; listar
+datas não precisa repetir o join espacial de milhões de linhas. Os indicadores continuam vindo
+da view, em consultas somente de leitura.
+
+A seleção semanal usa somente semanas disponíveis na fonte selecionada. O intervalo de datas apresentado respeita
 as bordas do estudo. Os valores ausentes permanecem nulos, sem interpolação.
 
 O mapa usa centróides em EPSG:4326. O filtro **Categorias** reúne as classes
@@ -126,9 +154,9 @@ usa parte deles. A disponibilidade de componentes não afirma validação agron�
 | Carbono orgânico | g/kg | Propriedade de 0–30 cm |
 | Densidade do solo | g/cm³ | Propriedade de 0–30 cm |
 
-Na seção Sobre o indicador, a interface identifica que os parâmetros mostrados são os da
-configuração atual: a view não
-guarda todos os pesos/limiares de cada execução. Consulte a linhagem da carga para reproduzi-la.
+Na seção Sobre o indicador, PostgreSQL mostra os parâmetros da configuração atual: a view
+não guarda todos os pesos/limiares de cada execução. No modo S3, os parâmetros e o timestamp
+de processamento vêm dos metadados Gold publicados junto aos arquivos.
 
 ## Processamento e limites
 

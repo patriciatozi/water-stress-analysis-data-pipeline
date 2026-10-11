@@ -1,7 +1,8 @@
-"""Local orchestration only; each task runs the project's existing pipeline CLI."""
+"""Orchestrate existing CLIs; publish to local PostGIS or S3 for cloud consumption."""
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 
 import pendulum
@@ -21,21 +22,14 @@ def select_mode() -> str:
         "full": "ingest_ibge",
         "satellite-gold": "transform_satellite",
         "gold-only": "transform_gold",
-        "water-balance-only": "transform_water_balance",
     }[mode]
 
 
 def select_publication() -> str:
+    if os.getenv("WATER_STRESS_DASHBOARD__SOURCE", "postgres") == "s3":
+        return "publish_dashboard"
     return (
         "migrate_database" if get_current_context()["params"]["load_database"] else "files_complete"
-    )
-
-
-def select_water_publication() -> str:
-    return (
-        "migrate_water_balance"
-        if get_current_context()["params"]["load_database"]
-        else "water_balance_files_complete"
     )
 
 
@@ -62,11 +56,7 @@ with DAG(
     is_paused_upon_creation=True,
     default_args={"retries": 0, "execution_timeout": timedelta(hours=24)},
     params={
-        "mode": Param(
-            "gold-only",
-            type="string",
-            enum=["full", "satellite-gold", "gold-only", "water-balance-only"],
-        ),
+        "mode": Param("gold-only", type="string", enum=["full", "satellite-gold", "gold-only"]),
         "load_database": Param(False, type="boolean"),
     },
     tags=["water-stress", "historical", "local"],
@@ -102,24 +92,11 @@ with DAG(
     register = command_task("register_bronze", "run_database", "--register-bronze")
     load = command_task("load_database", "run_database", "--load --dataset all")
     files_complete = EmptyOperator(task_id="files_complete")
-    water_balance = command_task(
-        "transform_water_balance", "run_transformation", "--source gold-water-balance"
-    )
-    water_quality = command_task(
-        "validate_water_balance", "run_quality", "--dataset water_stress_weekly_v2"
-    )
-    choose_water_publication = BranchPythonOperator(
-        task_id="select_water_publication", python_callable=select_water_publication
-    )
-    water_migrate = command_task("migrate_water_balance", "run_database", "--migrate")
-    water_load = command_task(
-        "load_water_balance",
-        "run_database",
-        "--load --dataset soil_hydraulics --dataset water_stress_weekly_v2",
-    )
-    water_files_complete = EmptyOperator(task_id="water_balance_files_complete")
+    if os.getenv("WATER_STRESS_DASHBOARD__SOURCE", "postgres") == "s3":
+        publish = command_task("publish_dashboard", "run_dashboard_publication", "")
+        choose_publication >> publish
 
-    choose_mode >> [ingest_ibge, satellite, gold, water_balance]
+    choose_mode >> [ingest_ibge, satellite, gold]
     ingest_ibge >> [ingest_weather, ingest_soil, ingest_crop, ingest_satellite, grid]
     [grid, ingest_crop] >> crop
     [grid, ingest_soil] >> soil
@@ -129,6 +106,3 @@ with DAG(
     gold >> quality >> choose_publication
     choose_publication >> [migrate, files_complete]
     migrate >> register >> load
-    water_balance >> water_quality >> choose_water_publication
-    choose_water_publication >> [water_migrate, water_files_complete]
-    water_migrate >> water_load

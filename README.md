@@ -4,6 +4,29 @@ Pipeline acadêmico e reprodutível para integrar dados meteorológicos, de solo
 
 > Este README é uma documentação viva. Ele deve ser atualizado sempre que o escopo, as fontes, as decisões técnicas ou os comandos do projeto mudarem.
 
+## Infraestrutura local ou AWS
+
+Para executar com os dados existentes, selecione `--infra local|aws`:
+
+```bash
+uv run python -m water_stress.pipelines.run_infrastructure --infra local up
+# Na EC2, após restaurar os arquivos do S3 e preparar .env.aws:
+uv run python -m water_stress.pipelines.run_infrastructure --infra aws up
+# Publicar os arquivos existentes para o dashboard S3:
+docker compose --env-file .env.aws --project-name water-stress-aws \
+  -f compose.airflow.yml -f compose.aws.yml run --rm --no-deps \
+  --entrypoint /opt/pipeline-venv/bin/python airflow \
+  -m water_stress.pipelines.run_dashboard_publication --config configs/project.yml
+```
+
+O modo AWS usa uma única EC2 com Airflow, seu banco de metadados e o dashboard v1. O painel
+consome uma publicação privada no S3 por um cache Parquet validado; PostGIS é opcional e
+permanece fora desse fluxo. S3 também preserva o snapshot dos arquivos Bronze, Silver e Gold
+restaurados para processamento no disco da EC2. A publicação inicial não recalcula dados.
+O modo local mantém o Compose atual e a leitura do PostgreSQL. O DAG AWS publica no S3 após
+validar a Gold; para os dados existentes, usar `gold-only` e `load_database=false`.
+Veja o [passo a passo de publicação, restauração, acesso e custos](docs/aws_deployment.md).
+
 ## Visão do projeto
 
 O objetivo de longo prazo é produzir uma base espaço-temporal capaz de apoiar estudos de déficit
@@ -40,7 +63,7 @@ As saídas deste repositório são estimativas acadêmicas. Elas não constituem
 | Silver `satellite_observation` | Implementada e testada localmente | NDVI/NDMI por cena e `grid_id` |
 | Camada Gold semanal | Implementada inicialmente e testada | Features climáticas, solo, soja e Sentinel-2 opcionais |
 | Persistência PostgreSQL/PostGIS | Implementada e testada com mocks | Manifestos Bronze e tabelas Silver/Gold relacionais |
-| Dashboard Streamlit | Implementado e testado | Score v1, mapas, fatores e histórico; leitura local ou PostgreSQL |
+| Dashboard Streamlit | Implementado e testado | Score v1, mapas e fatores; PostgreSQL local ou publicação S3 com cache na AWS |
 | INMET | Fora do escopo atual | Fonte candidata para validação posterior |
 
 Os smoke tests anteriores de Sorriso continuam como evidência dos clientes, mas seus artefatos
@@ -50,8 +73,8 @@ caminhos particionados.
 ## Dashboard de visualização
 
 O painel Streamlit apresenta o score provisório v1, cobertura, classes de risco, clima,
-NDVI/NDMI. Reutiliza os dados existentes, com leitura direta do PostgreSQL, sem reprocessar
-o pipeline.
+NDVI/NDMI. Reutiliza os dados existentes: PostgreSQL no modo local e publicação Parquet
+no S3 com cache validado na EC2 no modo AWS, sem recalcular o score no dashboard.
 
 ```bash
 uv sync --group dashboard

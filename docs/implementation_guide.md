@@ -174,6 +174,10 @@ Pontos de entrada:
 
 ### Armazenamento
 
+O [modo de infraestrutura local/AWS](aws_deployment.md) publica snapshots dos dados existentes
+em S3 e os restaura no disco da EC2 com validação SHA-256. Os transformadores continuam usando
+filesystem; essa entrega não implementa um `StorageClient` S3 direto nem altera regras de negócio.
+
 `StorageClient` é a interface preparada para uma futura implementação S3 ou ADLS.
 `LocalStorageClient` é a implementação atual.
 
@@ -706,9 +710,11 @@ alterar a Bronze nem repetir a transformação Silver.
 O consumidor Streamlit está implementado em `dashboard_app.py`, com leitura/validação em
 `water_stress.dashboard.data` e agregações independentes da interface em
 `water_stress.dashboard.analysis`. Usa o score v1; o balanço v2 permanece separado.
-O painel consulta diretamente o PostgreSQL, sem seleção de fonte nem fallback para arquivos.
+O painel usa PostgreSQL local por padrão. Na AWS, `WATER_STRESS_DASHBOARD__SOURCE=s3`
+seleciona uma publicação Parquet no S3, baixada para um cache validado e separado dos
+arquivos de processamento. Não há fallback entre fontes quando uma leitura falha.
 Também pode executar no serviço `dashboard` do Compose, compartilhando a imagem do Airflow,
-sem montar datasets locais nem iniciar os serviços de orquestração.
+sem iniciar os serviços de orquestração; na AWS monta somente o volume do cache do dashboard.
 Execução, conexão e regras de apresentação: [guia do dashboard](dashboard.md).
 
 - Usar `water_stress_risk_class` para a legenda de quatro níveis e `monitoring_guidance` para
@@ -734,10 +740,14 @@ WHERE week_start = DATE '2023-09-04';
 
 ## Orquestração Airflow
 
-`dags/water_stress_pipeline.py` coordena os CLIs existentes em quatro modos: execução completa,
-Sentinel-2 + Gold, somente Gold e somente balanço hídrico. O gate `pipelines/run_quality.py` impede publicação de Gold
+`dags/water_stress_pipeline.py` coordena os CLIs existentes nos três modos originais:
+execução completa, Sentinel-2 + Gold e somente Gold, usando o score `academic-index-v1`.
+O balanço hídrico v2 é executado somente por CLI explícito, fora do DAG.
+O gate `pipelines/run_quality.py` impede publicação de Gold
 vazia, relatório inválido ou qualidade `failed`, permitindo `warning` documentado. A carga no banco
 é opcional e segue migrations → manifestos → datasets em ordem de dependência.
+Na AWS, o gate é seguido por `publish_dashboard`: publica a grade Silver, a Gold v1 e seus
+metadados no S3, sem carga no PostgreSQL. O parâmetro `load_database` aplica-se ao modo local.
 Instalação, comandos e limites operacionais: [guia Airflow](airflow.md).
 
 ## Score com balanço diário superficial

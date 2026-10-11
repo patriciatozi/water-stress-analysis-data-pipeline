@@ -113,7 +113,9 @@ class DashboardReader:
     def weeks(self) -> tuple[date, ...]:
         if self.source == "postgres":
             rows = self._query(
-                "SELECT DISTINCT week_start FROM gold.water_stress_dashboard "
+                # Gold's grid foreign key guarantees the same weeks as the serving
+                # view. Listing dates does not need millions of spatial joins.
+                "SELECT DISTINCT week_start FROM gold.water_stress_weekly "
                 "WHERE week_end >= %s AND week_start <= %s AND grid_id LIKE %s ORDER BY week_start",
                 self._scope(),
             )

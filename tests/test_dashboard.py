@@ -344,6 +344,25 @@ def test_week_and_history_reject_wrong_partition_dates(dashboard_data: Settings)
         reader.history("cell-1")
 
 
+def test_postgres_week_navigation_avoids_spatial_joins(
+    dashboard_data: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weeks = (date(2023, 9, 4), date(2023, 9, 11))
+
+    def query(reader: DashboardReader, sql: str, parameters: tuple = ()) -> list[dict]:
+        assert "gold.water_stress_dashboard" not in sql
+        assert "JOIN" not in sql.upper()
+        assert parameters == (
+            dashboard_data.study.start_date,
+            dashboard_data.study.end_date,
+            f"{dashboard_data.study.area_code}_{dashboard_data.spatial.screening_grid_meters}m_%",
+        )
+        return [{"week_start": week} for week in weeks]
+
+    monkeypatch.setattr(DashboardReader, "_query", query)
+    assert DashboardReader(dashboard_data, "postgres").weeks() == weeks
+
+
 def test_history_rejects_duplicate_cell_weeks(dashboard_data: Settings) -> None:
     path = gold_weekly.dataset_path(dashboard_data) / "week_start=2023-09-04" / "part-000.parquet"
     table = pq.ParquetFile(path).read()
@@ -361,7 +380,7 @@ def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_app_
     assert app.title[0].value == "Estresse hídrico e recomendação de irrigação na soja"
     assert not app.selectbox
     description = next(
-        item.proto.body for item in app.get("html") if "O que o score indica" in item.proto.body
+        item.proto.body for item in app.get("html") if "Como o score é composto?" in item.proto.body
     )
     assert "de 0 a 100" in description
     assert "resultados parciais" in description
