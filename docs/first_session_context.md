@@ -1,5 +1,33 @@
 # Memória de desenvolvimento — Water Stress Analysis Data Pipeline
 
+## Complemento da sessão: execução completa na EC2 — 2026-10-10
+
+- O modo `full` continua disponível no Airflow da AWS: despausar `water_stress_pipeline`
+  e disparar com `{"mode":"full","load_database":false}`. Percorre ingestão Bronze,
+  transformação Silver, Gold v1, validação e publicação no S3. Artefatos e checkpoints
+  válidos são reutilizados; arquivos ausentes ou inválidos podem exigir fontes externas.
+  Não é necessário apagar arquivos no S3 para executar novamente.
+- Na configuração AWS atual, `select_publication` escolhe `publish_dashboard` porque
+  `WATER_STRESS_DASHBOARD__SOURCE=s3`. `migrate_database`, `register_bronze` e
+  `load_database` ficam como `skipped`, mesmo se o parâmetro `load_database` for `true`.
+  No ambiente local, esse parâmetro continua controlando a publicação no PostgreSQL.
+- Para executar também as tasks de banco na EC2, seria necessário iniciar o PostGIS
+  opcional, habilitar a persistência no ambiente do Airflow e ajustar o ramo da DAG para
+  combinar carga relacional e publicação S3. Isso foi discutido, mas não implementado.
+  Disparar `migrate_database` isoladamente na configuração atual falharia por persistência
+  desabilitada. O PostgreSQL de metadados do Airflow é independente do banco do projeto.
+- A execução `full` ainda não foi testada na EC2; conclusão e duração permanecem sem
+  validação real. O teste efetivamente concluído foi `gold-only`, registrado abaixo.
+  Esta atualização de contexto não dispara a pipeline nem altera a infraestrutura.
+- O login do Airflow na AWS é independente do login local. O usuário é `admin`; a senha
+  gerada pode ser consultada pelo operador dentro da EC2 com
+  `docker exec water-stress-aws-airflow-1 cat /opt/airflow/simple_auth_manager_passwords.json.generated`.
+  A senha de metadados não é a senha da interface; não registrar nem compartilhar segredos.
+- Acesso público ao dashboard foi discutido, mas não habilitado. O acesso continua por
+  túnel SSH: dashboard em `http://localhost:18501`, Airflow em `http://localhost:18080`.
+  Helper local: `python3 .deployment/aws-access.py start|connect|shell|stop|status`.
+  Encerrar o túnel não para a EC2; usar `stop` ao terminar para economizar os US$ 50 do Lab.
+
 ## Dashboard AWS alimentado pelo S3 — 2026-10-10
 
 - Local mantém PostgreSQL; AWS usa `WATER_STRESS_DASHBOARD__SOURCE=s3`, com bucket/prefixo/região

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 import numpy as np
@@ -195,3 +196,107 @@ def summarize(table: pa.Table) -> WeeklySummary:
         coverage,
         risk_area,
     )
+
+
+@dataclass(frozen=True)
+class MonthlySummary:
+    month: date
+    available_days: int
+    expected_days: int
+    score: float | None
+    high_risk_pct: float | None
+    scored_coverage_pct: float | None
+    complete_coverage_pct: float | None
+    classified_coverage_pct: float | None
+
+
+def summarize_months(
+    evolution: pa.Table, start_date: date, end_date: date
+) -> tuple[MonthlySummary, ...]:
+    """Summarize weekly values by overlapping calendar days and equivalent soybean area.
+
+    Weekly values are held constant only for aggregation, not interpreted as daily
+    observations. Missing weeks contribute no weight; expected days retain those gaps.
+    High-risk share uses classified area, so missing classes never become low risk.
+    """
+    if start_date > end_date:
+        raise ValueError("O início do período deve preceder o fim")
+    weeks = evolution.sort_by([("week_start", "ascending")]).to_pylist()
+    previous_end = None
+    for row in weeks:
+        start, end = row["week_start"], row["week_end"]
+        if not isinstance(start, date) or not isinstance(end, date) or start > end:
+            raise ValueError("Datas semanais inválidas no resumo temporal")
+        if previous_end is not None and start <= previous_end:
+            raise ValueError("Semanas duplicadas ou sobrepostas no resumo temporal")
+        previous_end = end
+        if row["cell_count"] < 0:
+            raise ValueError("Contagem de células deve ser não negativa")
+        areas = [
+            row[name]
+            for name in (
+                "soy_area_km2",
+                "scored_area_km2",
+                "complete_area_km2",
+                "classified_area_km2",
+                "high_risk_area_km2",
+            )
+        ]
+        if any(value is None or not np.isfinite(value) or value < 0 for value in areas):
+            raise ValueError("Áreas do resumo temporal devem ser finitas e não negativas")
+        total, scored, complete, classified, high = areas
+        if any(
+            lower > upper and not np.isclose(lower, upper, rtol=1e-12, atol=1e-9)
+            for lower, upper in (
+                (complete, scored),
+                (scored, total),
+                (high, classified),
+                (classified, scored),
+            )
+        ):
+            raise ValueError("Áreas do resumo temporal incompatíveis com a cobertura")
+        score = row["score"]
+        if (score is None) != (scored == 0) or (
+            score is not None and (not np.isfinite(score) or not 0 <= score <= 1)
+        ):
+            raise ValueError("Score do resumo temporal incompatível com a área disponível")
+
+    summaries = []
+    month = start_date.replace(day=1)
+    while month <= end_date:
+        next_month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        first = max(month, start_date)
+        last = min(next_month - timedelta(days=1), end_date)
+        available_days = 0
+        total_weight = scored_weight = complete_weight = classified_weight = high_weight = 0.0
+        score_sum = 0.0
+        for row in weeks:
+            days = max(0, (min(row["week_end"], last) - max(row["week_start"], first)).days + 1)
+            if not days or not row["cell_count"]:
+                continue
+            available_days += days
+            total_weight += row["soy_area_km2"] * days
+            scored_weight += row["scored_area_km2"] * days
+            complete_weight += row["complete_area_km2"] * days
+            classified_weight += row["classified_area_km2"] * days
+            high_weight += row["high_risk_area_km2"] * days
+            if row["score"] is not None:
+                score_sum += row["score"] * row["scored_area_km2"] * days
+        summaries.append(
+            MonthlySummary(
+                month=month,
+                available_days=available_days,
+                expected_days=(last - first).days + 1,
+                score=score_sum / scored_weight if scored_weight else None,
+                high_risk_pct=100 * high_weight / classified_weight if classified_weight else None,
+                scored_coverage_pct=100 * scored_weight / total_weight if total_weight else None,
+                complete_coverage_pct=(
+                    100 * complete_weight / total_weight if total_weight else None
+                ),
+                classified_coverage_pct=(
+                    100 * classified_weight / total_weight if total_weight else None
+                ),
+            )
+        )
+        month = next_month
+    return tuple(summaries)

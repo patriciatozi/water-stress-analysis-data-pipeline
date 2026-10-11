@@ -15,6 +15,7 @@ from water_stress.dashboard.analysis import (
     geographic_subset,
     risk_keys,
     summarize,
+    summarize_months,
     validate_features,
 )
 from water_stress.dashboard.data import DashboardReader
@@ -328,6 +329,11 @@ def dashboard_app_test(dashboard_data: Settings, monkeypatch: pytest.MonkeyPatch
     return app.run()
 
 
+@pytest.fixture
+def dashboard_week_app_test(dashboard_app_test):
+    return dashboard_app_test.radio(key="section").set_value("Explorar uma semana").run()
+
+
 def test_week_and_history_reject_wrong_partition_dates(dashboard_data: Settings) -> None:
     path = gold_weekly.dataset_path(dashboard_data) / "week_start=2023-09-04" / "part-000.parquet"
     table = pq.ParquetFile(path).read()
@@ -371,17 +377,15 @@ def test_history_rejects_duplicate_cell_weeks(dashboard_data: Settings) -> None:
         DashboardReader(dashboard_data).history("cell-1")
 
 
-def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_app_test) -> None:
-    app = dashboard_app_test
+def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_week_app_test) -> None:
+    app = dashboard_week_app_test
     assert not app.exception and not app.error
     assert app.metric[0].value == "85,7"
     assert len(app.metric) == 5  # Three summary metrics plus NDVI and NDMI.
     assert app.metric[1].value == "2 km²"
-    assert app.title[0].value == "Estresse hídrico e recomendação de irrigação na soja"
+    assert app.title[0].value == "Sinais de risco hídrico na soja"
     assert not app.selectbox
-    description = next(
-        item.proto.body for item in app.get("html") if "Como o score é composto?" in item.proto.body
-    )
+    description = " ".join(item.proto.body for item in app.get("html"))
     assert "de 0 a 100" in description
     assert "resultados parciais" in description
     assert "evaporação e transpiração" in description
@@ -433,7 +437,14 @@ def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_app_
 
 def test_streamlit_navigation_and_metadata(dashboard_app_test) -> None:
     app = dashboard_app_test
-    assert app.radio(key="section").options == ["Visão geral", "Sobre o indicador"]
+    assert app.radio(key="section").options == [
+        "Todo o período",
+        "Explorar uma semana",
+        "Sobre o indicador",
+    ]
+    assert not app.select_slider
+    assert not app.metric
+    assert len(app.get("plotly_chart")) == 3
     app.radio(key="section").set_value("Sobre o indicador").run()
     assert not app.exception
     assert len(app.dataframe) == 1
@@ -449,11 +460,11 @@ def test_streamlit_empty_gold_has_actionable_message(
         common.write_parquet(path, pq.ParquetFile(path).read().slice(0, 0))
     next(button for button in app.button if button.label == "Atualizar leitura").click().run()
     assert not app.exception
-    assert any("Nenhuma célula disponível" in item.value for item in app.info)
+    assert any("Não há indicador disponível" in item.value for item in app.info)
 
 
-def test_streamlit_map_always_uses_carto_background(dashboard_app_test) -> None:
-    app = dashboard_app_test
+def test_streamlit_map_always_uses_carto_background(dashboard_week_app_test) -> None:
+    app = dashboard_week_app_test
     assert not app.exception
     assert not any(widget.label == "Mapa de fundo" for widget in app.checkbox)
     spec = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
@@ -462,7 +473,7 @@ def test_streamlit_map_always_uses_carto_background(dashboard_app_test) -> None:
 
 
 def test_streamlit_pending_classification_is_not_zero_risk(
-    dashboard_app_test, dashboard_data: Settings
+    dashboard_week_app_test, dashboard_data: Settings
 ) -> None:
     root = gold_weekly.dataset_path(dashboard_data)
     for start, _ in gold_weekly._study_weeks(dashboard_data):
@@ -473,7 +484,7 @@ def test_streamlit_pending_classification_is_not_zero_risk(
             .drop(["water_stress_risk_class", "risk_classification_version", "monitoring_guidance"])
         )
         common.write_parquet(path, table)
-    app = dashboard_app_test
+    app = dashboard_week_app_test
     next(button for button in app.button if button.label == "Atualizar leitura").click().run()
     assert not app.exception
     assert app.metric[1].value == "-"
@@ -500,3 +511,146 @@ def test_streamlit_connection_errors_do_not_expose_credentials(
     assert "private-test-secret" not in app.error[0].value
     assert "PostgreSQL" in app.error[0].value
     assert not app.metric
+
+
+def test_monthly_summary_splits_weeks_and_weights_area_and_days(dashboard_data: Settings) -> None:
+    evolution = DashboardReader(dashboard_data).evolution(None, None)
+    first = evolution.slice(0, 1).to_pylist()[0]
+    first.update(week_start=date(2023, 9, 25), week_end=date(2023, 10, 1))
+    second = first | {
+        "week_start": date(2023, 10, 2),
+        "week_end": date(2023, 10, 8),
+        "score": 0.0,
+        "soy_area_km2": 1.0,
+        "scored_area_km2": 1.0,
+        "complete_area_km2": 1.0,
+        "classified_area_km2": 1.0,
+        "high_risk_area_km2": 0.0,
+    }
+    table = pa.Table.from_pylist([second, first], schema=evolution.schema)
+    september, october, november = summarize_months(table, date(2023, 9, 28), date(2023, 11, 3))
+    assert september.available_days == september.expected_days == 3
+    assert september.score == pytest.approx(1.5 / 1.75)
+    assert september.high_risk_pct == pytest.approx(100 * 1.5 / 1.75)
+    assert october.available_days == 8
+    assert october.expected_days == 31
+    assert october.score == pytest.approx(1.5 / (1.75 + 7))
+    assert october.high_risk_pct == pytest.approx(100 * 1.5 / (1.75 + 7))
+    assert october.complete_coverage_pct == pytest.approx(100 * (0.25 + 7) / (2.25 + 7))
+    assert october.classified_coverage_pct == pytest.approx(100 * (1.75 + 7) / (2.25 + 7))
+    assert november.available_days == 0
+    assert november.expected_days == 3
+    assert november.score is None
+    assert november.high_risk_pct is None
+    assert november.scored_coverage_pct is None
+    assert november.complete_coverage_pct is None
+    assert november.classified_coverage_pct is None
+    assert summarize_months(table, date(2023, 9, 28), date(2023, 11, 3)) == (
+        september,
+        october,
+        november,
+    )
+
+
+def test_monthly_summary_distinguishes_missing_class_score_and_empty(
+    dashboard_data: Settings,
+) -> None:
+    reader = DashboardReader(dashboard_data)
+    evolution = reader.evolution(None, None)
+    row = evolution.slice(0, 1).to_pylist()[0]
+    row.update(classified_area_km2=0.0, high_risk_area_km2=0.0)
+    table = pa.Table.from_pylist([row], schema=evolution.schema)
+    summary = summarize_months(table, date(2023, 9, 1), date(2023, 9, 30))[0]
+    assert summary.score is not None
+    assert summary.scored_coverage_pct == pytest.approx(100 * 1.75 / 2.25)
+    assert summary.high_risk_pct is None
+    assert summary.classified_coverage_pct == 0
+    row.update(score=None, scored_area_km2=0.0, complete_area_km2=0.0)
+    table = pa.Table.from_pylist([row], schema=evolution.schema)
+    summary = summarize_months(table, date(2023, 9, 1), date(2023, 9, 30))[0]
+    assert summary.available_days == 7
+    assert summary.score is None
+    assert summary.high_risk_pct is None
+    assert summary.complete_coverage_pct == 0
+    empty = summarize_months(table.slice(0, 0), date(2023, 9, 1), date(2023, 9, 30))[0]
+    assert empty.available_days == 0 and empty.score is None
+    row.update(cell_count=0, soy_area_km2=0.0)
+    table = pa.Table.from_pylist([row], schema=evolution.schema)
+    assert summarize_months(table, date(2023, 9, 1), date(2023, 9, 30)) == (empty,)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"week_end": date(2023, 9, 1)},
+        {"week_start": None},
+        {"soy_area_km2": -1.0},
+        {"soy_area_km2": float("nan")},
+        {"complete_area_km2": 100.0},
+        {"score": 2.0},
+        {"score": None},
+        {"cell_count": -1},
+    ],
+)
+def test_monthly_summary_rejects_invalid_input(dashboard_data: Settings, changes: dict) -> None:
+    evolution = DashboardReader(dashboard_data).evolution(None, None)
+    row = evolution.slice(0, 1).to_pylist()[0] | changes
+    table = pa.Table.from_pylist([row], schema=evolution.schema)
+    with pytest.raises(ValueError):
+        summarize_months(table, date(2023, 9, 1), date(2023, 9, 30))
+
+
+def test_monthly_summary_rejects_overlap_and_inverted_period(dashboard_data: Settings) -> None:
+    evolution = DashboardReader(dashboard_data).evolution(None, None)
+    with pytest.raises(ValueError, match="sobrepostas"):
+        summarize_months(
+            pa.concat_tables([evolution, evolution]), date(2023, 9, 1), date(2023, 9, 30)
+        )
+    with pytest.raises(ValueError, match="início"):
+        summarize_months(evolution, date(2023, 10, 1), date(2023, 9, 30))
+
+
+def test_streamlit_all_months_include_gaps_and_no_week_selection(
+    dashboard_app_test, dashboard_data: Settings
+) -> None:
+    from water_stress.dashboard import data
+
+    app = dashboard_app_test
+    local = DashboardReader(dashboard_data)
+    evolution = local.evolution(None, None)
+    row = evolution.slice(0, 1).to_pylist()[0]
+    settings = dashboard_data.model_copy(
+        update={"study": dashboard_data.study.model_copy(update={"end_date": date(2023, 11, 30)})}
+    )
+    # Keep the normal read/validation boundary; only change the configured period.
+    from unittest.mock import patch
+
+    with (
+        patch("water_stress.config.load_settings", return_value=settings),
+        patch.object(
+            data.DashboardReader,
+            "evolution",
+            return_value=pa.Table.from_pylist([row], schema=evolution.schema),
+        ),
+    ):
+        next(button for button in app.button if button.label == "Atualizar leitura").click().run()
+    assert not app.exception and not app.error
+    assert not app.select_slider
+    plot = json.loads(app.get("plotly_chart")[0].proto.spec)["data"][0]
+    assert plot["x"] == ["set/2023", "out/2023", "nov/2023"]
+    assert plot["y"] == [pytest.approx(100 * 1.5 / 1.75), None, None]
+    assert plot["connectgaps"] is False
+    assert any("semanas ausentes" in message.value for message in app.info)
+    assert len(app.dataframe[0].value) == 3
+
+
+def test_evolution_all_null_scores_keep_numeric_schema(dashboard_data: Settings) -> None:
+    reader = DashboardReader(dashboard_data)
+    for start in reader.weeks():
+        path = gold_weekly.dataset_path(dashboard_data) / f"week_start={start}" / "part-000.parquet"
+        table = pq.ParquetFile(path).read().slice(2, 1)
+        common.write_parquet(path, table)
+    evolution = reader.evolution(None, None)
+    assert evolution.schema.field("score").type == pa.float64()
+    assert evolution["score"].to_pylist() == [None, None]
+    assert summarize_months(evolution, date(2023, 9, 1), date(2023, 9, 30))[0].score is None

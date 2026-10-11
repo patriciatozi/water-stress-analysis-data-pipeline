@@ -152,6 +152,9 @@ class DashboardReader:
     def week(self, start: date, grid: pa.Table | None = None) -> pa.Table:
         if start not in self.weeks():
             raise ValueError("Semana fora dos dados disponíveis")
+        return self._read_week(start, grid)
+
+    def _read_week(self, start: date, grid: pa.Table | None) -> pa.Table:
         if self.source == "postgres":
             rows = self._query(
                 f"SELECT {', '.join(FEATURE_COLUMNS)}, centroid_latitude, centroid_longitude, "
@@ -254,12 +257,24 @@ class DashboardReader:
 
     def evolution(self, grid: pa.Table | None, bounds: GeographicBounds | None) -> pa.Table:
         rows = []
+        week_ends = dict(gold_weekly._study_weeks(self.settings))
         for start in self.weeks():
-            table = geographic_subset(self.week(start, grid), bounds)
+            table = geographic_subset(self._read_week(start, grid), bounds)
             summary = summarize(table)
+            del table
             rows.append(
                 {
                     "week_start": start,
+                    "week_end": week_ends[start],
+                    "cell_count": summary.cell_count,
+                    "soy_area_km2": summary.soy_area_km2,
+                    "scored_area_km2": summary.scored_area_km2,
+                    "complete_area_km2": summary.complete_area_km2,
+                    "classified_area_km2": sum(
+                        summary.risk_area[band.risk_class.value]
+                        for band in RISK_CLASSIFICATION_POLICY.bands
+                    ),
+                    "high_risk_area_km2": summary.high_risk_area_km2,
                     "score": summary.score,
                     "complete_score": summary.complete_score,
                     "partial_score": summary.partial_score,
@@ -268,7 +283,18 @@ class DashboardReader:
                     **summary.factors,
                 }
             )
-        return pa.Table.from_pylist(rows)
+        fields: list[pa.Field[Any]] = [
+            pa.field("week_start", pa.date32()),
+            pa.field("week_end", pa.date32()),
+            pa.field("cell_count", pa.int64()),
+        ]
+        fields.extend(
+            pa.field(name, pa.float64())
+            for name in rows[0]
+            if name not in ("week_start", "week_end", "cell_count")
+        )
+        schema = pa.schema(fields)
+        return pa.Table.from_pylist(rows, schema=schema)
 
     def fingerprint(self) -> str:
         """Cache identity excludes credentials; DB results also expire by UI TTL."""

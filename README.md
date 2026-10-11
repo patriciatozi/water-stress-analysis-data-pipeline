@@ -72,8 +72,10 @@ caminhos particionados.
 
 ## Dashboard de visualização
 
-O painel Streamlit apresenta o score provisório v1, cobertura, classes de risco, clima,
-NDVI/NDMI. Reutiliza os dados existentes: PostgreSQL no modo local e publicação Parquet
+O painel Streamlit abre com todos os meses do estudo: evolução do indicador provisório v1 e
+disponibilidade dos seus componentes. A visão semanal permite explorar mapa, classes e fatores;
+explicações e detalhes ficam disponíveis sob demanda. Reutiliza os dados existentes: PostgreSQL
+no modo local e publicação Parquet
 no S3 com cache validado na EC2 no modo AWS, sem recalcular o score no dashboard.
 
 ```bash

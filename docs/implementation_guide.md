@@ -602,7 +602,8 @@ uv run --group notebook jupyter lab notebooks/
 - associação persistida de `grid_id` com `weather_cell_id`;
 - grade adaptativa de 250 m;
 - validação com INMET;
-- armazenamento S3 ou ADLS.
+- processamento dos transformadores diretamente em armazenamento de objetos. Snapshots e
+  publicação S3 para o dashboard já estão implementados; ver [AWS](aws_deployment.md).
 
 ## 14. Regras que não devem mudar silenciosamente
 
@@ -673,7 +674,8 @@ persistência do estresse. A nova classificação não acrescenta esses sinais a
 O [plano de implementação do balanço diário](score_v2_implementation_plan.md) registra a evolução
 proposta usando somente os dados locais existentes, com saída semanal. As escolhas confirmadas
 são Kc por fase com calendário de cenário, score combinado e três condições iniciais de água.
-Esse modelo ainda não foi implementado e não altera o índice vigente.
+O modelo foi implementado e testado em piloto técnico, separado do índice vigente e do dashboard.
+A execução estadual e sua promoção continuam pendentes; ver [score_v2.md](score_v2.md).
 
 Saída: Parquet Zstandard por semana, schema, qualidade e metadados com checksums dos inputs.
 Checkpoints por semana reutilizam somente outputs íntegros com os mesmos inputs e parâmetros.
@@ -713,6 +715,9 @@ O consumidor Streamlit está implementado em `dashboard_app.py`, com leitura/val
 O painel usa PostgreSQL local por padrão. Na AWS, `WATER_STRESS_DASHBOARD__SOURCE=s3`
 seleciona uma publicação Parquet no S3, baixada para um cache validado e separado dos
 arquivos de processamento. Não há fallback entre fontes quando uma leitura falha.
+Abre com todos os meses do estudo, resumidos a partir da Gold semanal por área e dias de
+sobreposição no mês; semanas ausentes permanecem lacunas. A média mensal não recebe uma nova
+classe de risco. Mapa e fatores ficam em “Explorar uma semana”; o método em “Sobre o indicador”.
 Também pode executar no serviço `dashboard` do Compose, compartilhando a imagem do Airflow,
 sem iniciar os serviços de orquestração; na AWS monta somente o volume do cache do dashboard.
 Execução, conexão e regras de apresentação: [guia do dashboard](dashboard.md).

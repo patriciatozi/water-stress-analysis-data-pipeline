@@ -306,6 +306,10 @@ def test_streamlit_s3_source_never_queries_postgres(publication, monkeypatch) ->
         str(Path(__file__).resolve().parents[1] / "dashboard_app.py"), default_timeout=15
     ).run()
     assert not app.exception and not app.error
+    assert app.radio(key="section").value == "Todo o período"
+    assert not app.select_slider
+    app.radio(key="section").set_value("Explorar uma semana").run()
+    assert not app.exception and not app.error
     assert app.metric[0].value == "85,7"
     next(button for button in app.button if button.label == "Atualizar leitura").click().run()
     assert not app.exception and not app.error

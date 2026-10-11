@@ -25,13 +25,15 @@ from water_stress.dashboard.analysis import (
     geographic_subset,
     risk_keys,
     summarize,
+    summarize_months,
 )
 from water_stress.dashboard.data import DashboardReader, DataSource
 from water_stress.dashboard.s3_cache import DashboardStorageSettings, fetch_dashboard
 from water_stress.transformation import gold_weekly
 
 LOGGER = logging.getLogger(__name__)
-PAGE_TITLE = "Estresse hídrico e recomendação de irrigação na soja"
+PAGE_TITLE = "Sinais de risco hídrico na soja"
+MONTH_NAMES = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 MAP_RISK_LABELS = {
     key: label for key, label in RISK_LABELS.items() if key not in ("pending", "missing")
 }
@@ -42,10 +44,10 @@ MAP_CATEGORY_LABELS = {
 
 FACTOR_LABELS = {
     "precipitation_mm_7d": "Chuva",
-    "eto_mm_7d": "ETo",
-    "water_deficit_mm_7d": "Déficit hídrico",
-    "ndvi_median": "NDVI",
-    "ndmi_median": "NDMI",
+    "eto_mm_7d": "Demanda de água do ar (ETo)",
+    "water_deficit_mm_7d": "Falta de chuva frente à demanda",
+    "ndvi_median": "Vigor da vegetação (NDVI)",
+    "ndmi_median": "Umidade da vegetação (NDMI)",
     "temperature_mean_c": "Temperatura média",
     "consecutive_dry_days": "Sequência seca",
     "clay_pct": "Argila",
@@ -69,7 +71,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]):has([title="Parcial"]) {
     background-color: #f4d46f !important; color: #594514 !important;}
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]) button {color: inherit !important;}
-.score-description {background: #e1efff; color: #0059b3; border-radius: 8px;
+.score-description {background: #f0f5f3; color: #233548; border-radius: 8px;
     padding: 16px; margin-bottom: 0; font-size: 1rem; line-height: 1.6;}
 .score-description p {margin: 16px 0 0;}
 .score-term {position: relative; display: inline-block;
@@ -96,6 +98,10 @@ def number(value: float | None, decimals: int = 1, suffix: str = "") -> str:
         return "-"
     formatted = f"{value:,.{decimals}f}".replace(",", "_").replace(".", ",").replace("_", ".")
     return f"{formatted}{suffix}"
+
+
+def month_label(value: date) -> str:
+    return f"{MONTH_NAMES[value.month - 1]}/{value.year}"
 
 
 @st.cache_data(ttl=300, max_entries=2, show_spinner=False)
@@ -182,7 +188,7 @@ def period_data(table: pa.Table, settings: Settings) -> pd.DataFrame:
 def render_metrics(summary: WeeklySummary) -> None:
     score, high, complete = st.columns(3)
     score.metric(
-        "Score médio · 0-100",
+        "Indicador médio · 0 a 100",
         number(None if summary.score is None else summary.score * 100),
         help=(
             "Média ponderada pela área de soja com score. Pode combinar completos e parciais; "
@@ -190,7 +196,7 @@ def render_metrics(summary: WeeklySummary) -> None:
         ),
     )
     high.metric(
-        "Área em alto ou crítico",
+        "Área com sinais altos ou críticos",
         number(
             summary.high_risk_area_km2
             if summary.scored_area_km2 > summary.pending_class_area_km2
@@ -204,7 +210,7 @@ def render_metrics(summary: WeeklySummary) -> None:
         ),
     )
     complete.metric(
-        "Área com score completo",
+        "Área com os três componentes",
         number(summary.complete_coverage_pct, suffix="%"),
         help=(
             "Área equivalente com todos os componentes / área equivalente total de soja no recorte."
@@ -215,28 +221,34 @@ def render_metrics(summary: WeeklySummary) -> None:
 def render_score_description() -> None:
     st.html("""
         <div class="score-description">
-            <strong>Como o score é composto?</strong>
-            <p>Estimativa semanal do risco de estresse hídrico da soja, de 0 a 100:
-            quanto maior o valor, maior o risco. Combina déficit entre
-            <span class="score-term" tabindex="0" aria-describedby="eto-description">ETo<span
-                role="tooltip" id="eto-description">Água que uma vegetação de referência
-                perderia para o ar por evaporação e transpiração.</span></span>
-            e chuva,
-            <span class="score-term" tabindex="0" aria-describedby="ndvi-description">NDVI<span
-                role="tooltip" id="ndvi-description">Indica o vigor e a cobertura da vegetação
-                a partir de imagens de satélite.</span></span>
-            e <span class="score-term" tabindex="0" aria-describedby="ndmi-description">NDMI<span
-                role="tooltip" id="ndmi-description">Indica a umidade da vegetação a partir
-                de imagens de satélite.</span></span>;
-            resultados parciais usam os fatores disponíveis.</p>
+            <strong>O que este indicador mostra?</strong>
+            <p>Reúne sinais do clima e de imagens de satélite em uma escala de 0 a 100.
+            Valores maiores indicam condições mais associadas à falta de água.
+            Não é uma porcentagem de chance de perda da produção.</p>
         </div>
     """)
+    with st.expander("Como o indicador é composto?"):
+        st.html("""
+            <p>Combina a falta de chuva frente à demanda atmosférica de água
+            (<span class="score-term" tabindex="0" aria-describedby="eto-description">ETo<span
+                role="tooltip" id="eto-description">Água que uma vegetação de referência
+                perderia para o ar por evaporação e transpiração.</span></span>),
+            o vigor da vegetação
+            (<span class="score-term" tabindex="0" aria-describedby="ndvi-description">NDVI<span
+                role="tooltip" id="ndvi-description">Indica o vigor e a cobertura da vegetação
+                a partir de imagens de satélite.</span></span>)
+            e sua umidade
+            (<span class="score-term" tabindex="0" aria-describedby="ndmi-description">NDMI<span
+                role="tooltip" id="ndmi-description">Indica a umidade da vegetação a partir
+                de imagens de satélite.</span></span>);
+            resultados parciais usam os fatores disponíveis.</p>
+        """)
 
 
 def render_map(table: pa.Table, summary: WeeklySummary) -> None:
     left, right = st.columns([2.15, 1], gap="large")
     with left, st.container(border=True):
-        st.subheader("Mapa de riscos")
+        st.subheader("Onde estão os sinais de risco nesta semana?")
         chosen_categories = st.multiselect(
             "Categorias",
             list(MAP_CATEGORY_LABELS),
@@ -321,7 +333,7 @@ def render_map(table: pa.Table, summary: WeeklySummary) -> None:
             )
     with right:
         with st.container(border=True):
-            st.subheader("Área por classe")
+            st.subheader("Como a área se distribui?")
             keys = list(MAP_RISK_LABELS)
             figure = go.Figure(
                 go.Bar(
@@ -329,15 +341,17 @@ def render_map(table: pa.Table, summary: WeeklySummary) -> None:
                     y=[MAP_RISK_LABELS[key] for key in keys],
                     orientation="h",
                     marker_color=[RISK_COLORS[key] for key in keys],
+                    text=[number(risk_area[key], 1, " km²") for key in keys],
+                    textposition="auto",
                 )
             )
             figure.update_yaxes(autorange="reversed")
             st.plotly_chart(
                 style_chart(figure, height=260), width="stretch", config={"displayModeBar": False}
             )
-            st.caption("Área equivalente de soja, em km².")
+            st.caption("Área equivalente de soja, em km², nas categorias selecionadas no mapa.")
         with st.container(border=True):
-            st.subheader("Composição dos resultados")
+            st.subheader("Quais dados estão disponíveis?")
             st.caption(
                 "Área de soja com os 3 fatores do score (completo) ou parte deles (parcial)."
             )
@@ -347,6 +361,15 @@ def render_map(table: pa.Table, summary: WeeklySummary) -> None:
             }
             for label, area in areas.items():
                 st.write(f"**{label}** - {number(area, 0)} km²")
+            st.write(
+                "**Sem indicador** - "
+                f"{number(summary.soy_area_km2 - summary.scored_area_km2, 0)} km²"
+            )
+            if summary.pending_class_area_km2:
+                st.caption(
+                    f"{number(summary.pending_class_area_km2, 1)} km² têm indicador, "
+                    "mas ainda não têm classe publicada."
+                )
 
 
 def render_factors(summary: WeeklySummary) -> None:
@@ -371,11 +394,16 @@ def render_factors(summary: WeeklySummary) -> None:
             "Déficit = média dos déficits das células; "
             "não é a diferença entre as duas médias do gráfico."
         )
+        st.caption(
+            f"Área com dados: chuva {number(summary.factor_coverage['precipitation_mm_7d'])}% · "
+            f"demanda {number(summary.factor_coverage['eto_mm_7d'])}% · "
+            f"déficit {number(summary.factor_coverage['water_deficit_mm_7d'])}%"
+        )
     with vegetation, st.container(border=True):
         st.markdown("**Condição da vegetação e umidade espectral**")
         first, second = st.columns(2)
-        first.metric("NDVI", number(summary.factors["ndvi_median"], 3))
-        second.metric("NDMI", number(summary.factors["ndmi_median"], 3))
+        first.metric("Vigor (NDVI)", number(summary.factors["ndvi_median"], 3))
+        second.metric("Umidade (NDMI)", number(summary.factors["ndmi_median"], 3))
         st.caption(
             "NDVI e NDMI são médias ponderadas das medianas Gold disponíveis; faixa de -1 a 1."
         )
@@ -386,62 +414,131 @@ def render_factors(summary: WeeklySummary) -> None:
         st.write(f"Temperatura média: **{number(summary.factors['temperature_mean_c'])} °C**")
 
 
-def render_evolution(
+def render_period(
     settings: Settings, source: DataSource, identity: str, bounds: GeographicBounds | None
 ) -> None:
-    st.subheader("Evolução semanal")
-    with st.spinner("Resumindo as semanas disponíveis…"):
-        data = period_data(cached_evolution(settings, source, identity, bounds), settings)
-    left, right = st.columns(2, gap="large")
+    st.subheader("Como os sinais de risco mudaram ao longo do período?")
+    with st.spinner("Resumindo todas as semanas publicadas…"):
+        evolution = cached_evolution(settings, source, identity, bounds)
+    months = summarize_months(evolution, settings.study.start_date, settings.study.end_date)
+    observed = [month for month in months if month.score is not None]
+    if not observed:
+        st.info(
+            "Não há indicador disponível no período. Ausência de dados não significa baixo risco."
+        )
+    else:
+        peak = max(observed, key=lambda month: month.score if month.score is not None else -1)
+        peak_score = peak.score * 100 if peak.score is not None else None
+        ties = [month for month in observed if month.score == peak.score]
+        if len(observed) == 1:
+            st.write(
+                f"**{month_label(peak.month)} é o único mês com indicador disponível "
+                f"({number(peak_score)} pontos).** Ainda não é possível comparar meses."
+            )
+        elif len(ties) == len(observed):
+            st.write(f"**Os meses com dados têm a mesma média: {number(peak_score)} pontos.**")
+        else:
+            labels = ", ".join(month_label(month.month) for month in ties)
+            st.write(f"**Maior indicador médio em {labels}: {number(peak_score)} pontos.**")
+        st.caption(
+            "A comparação descreve os dados disponíveis. Mudanças nos componentes disponíveis "
+            "também podem alterar o indicador."
+        )
+    render_score_description()
+    labels = [month_label(month.month) for month in months]
+    left, right = st.columns([1.6, 1], gap="large")
     with left, st.container(border=True):
-        st.markdown("**Score por composição**")
-        figure = line_chart(
-            data,
-            {
-                "score": "Todos com score",
-                "complete_score": "Completos",
-                "partial_score": "Parciais",
-            },
-            scale=100,
-            y_title="Score · 0-100",
+        st.markdown("**Em quais meses os sinais foram mais fortes?**")
+        figure = go.Figure(
+            go.Scatter(
+                x=labels,
+                y=[None if month.score is None else month.score * 100 for month in months],
+                mode="lines+markers+text",
+                text=[
+                    number(None if month.score is None else month.score * 100) for month in months
+                ],
+                textposition="top center",
+                line=dict(color="#24745a", width=3),
+                marker=dict(size=8),
+                connectgaps=False,
+                hovertemplate="%{x}: %{y:.1f} pontos<extra></extra>",
+            )
         )
-        figure.update_yaxes(range=[0, 100])
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
-    with right, st.container(border=True):
-        st.markdown("**Cobertura por área de soja**")
-        figure = line_chart(
-            data,
-            {"coverage_pct": "Com score", "complete_coverage_pct": "Score completo"},
-            y_title="% da área",
-        )
-        figure.update_yaxes(range=[0, 100])
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
-    left, right = st.columns(2, gap="large")
-    with left, st.container(border=True):
-        st.markdown("**Chuva, ETo e déficit**")
+        figure.update_yaxes(range=[0, 110], tickvals=[0, 25, 50, 75, 100])
         st.plotly_chart(
-            line_chart(
-                data,
-                {
-                    name: FACTOR_LABELS[name]
-                    for name in ("precipitation_mm_7d", "eto_mm_7d", "water_deficit_mm_7d")
-                },
-                y_title="mm na janela",
-                colors=("#558bb8", "#8ca899", "#dba44a"),
-            ),
+            style_chart(figure, height=310, y_title="Indicador médio · 0 a 100"),
             width="stretch",
+            config={"displayModeBar": False},
+        )
+        st.caption(
+            "Média dos resultados semanais, ponderada pela área de soja e pelos dias no mês."
         )
     with right, st.container(border=True):
-        st.markdown("**Índices espectrais**")
+        st.markdown("**Quanto da área tem os três componentes?**")
+        figure = go.Figure(
+            go.Bar(
+                x=labels,
+                y=[month.complete_coverage_pct for month in months],
+                marker_color="#8c9ba5",
+                text=[number(month.complete_coverage_pct, 0, "%") for month in months],
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="%{x}: %{y:.1f}% da área observada<extra></extra>",
+            )
+        )
+        figure.update_yaxes(range=[0, 110], tickvals=[0, 25, 50, 75, 100])
         st.plotly_chart(
-            line_chart(data, {"ndvi_median": "NDVI", "ndmi_median": "NDMI"}, y_title="Índice"),
+            style_chart(figure, height=310, y_title="% da área observada"),
             width="stretch",
+            config={"displayModeBar": False},
+        )
+        st.caption(
+            "Três componentes: clima, vigor e umidade da vegetação. Completude não é precisão."
         )
     st.caption(
-        "O recorte geográfico se mantém entre semanas. Cada variável usa sua área disponível; "
-        "lacunas não são interpoladas. Semanas nas extremidades do estudo podem ter "
-        "menos de sete dias."
+        "Lacunas representam ausência de dados. Os meses são resumos de semanas, "
+        "não medições diárias nem novas classificações de risco."
     )
+    st.caption("A identificação de soja é anual e não confirma cultivo ativo em cada mês.")
+    if any(month.available_days < month.expected_days for month in months):
+        st.info(
+            "Há meses com semanas ausentes ou sem células. As médias usam apenas os dias "
+            "representados; confira a disponibilidade na tabela abaixo."
+        )
+    with st.expander("Comparar os meses em uma tabela"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Mês": month_label(month.month),
+                        "Indicador médio (0-100)": None
+                        if month.score is None
+                        else month.score * 100,
+                        "Área em alto/crítico entre as classificadas (%)": month.high_risk_pct,
+                        "Área com indicador (%)": month.scored_coverage_pct,
+                        "Área com classificação (%)": month.classified_coverage_pct,
+                        "Área com três componentes (%)": month.complete_coverage_pct,
+                        "Dias representados / dias do estudo": (
+                            f"{month.available_days}/{month.expected_days}"
+                        ),
+                    }
+                    for month in months
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "Percentuais são médias ponderadas por área e dias nas semanas disponíveis. "
+            "Alto/crítico usa somente a área com classe publicada. A mesma área não é somada "
+            "como hectares novos a cada semana."
+        )
+    with st.expander("Ver a evolução semana a semana"):
+        data = period_data(evolution, settings)
+        figure = line_chart(data, {"score": "Indicador médio"}, scale=100, y_title="0 a 100")
+        figure.update_yaxes(range=[0, 100])
+        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+        st.caption("Semanas sem publicação ficam vazias. Não há interpolação.")
 
 
 def render_cell(settings: Settings, source: DataSource, identity: str, week: date) -> None:
@@ -529,8 +626,9 @@ def render_method(reader: DashboardReader) -> None:
     st.subheader("Como ler este indicador")
     context = reader.context()
     st.write(
-        "O score v1 combina déficit entre ETo e chuva, NDVI e NDMI. É um indicador acadêmico "
-        "provisório de condições associadas ao estresse hídrico da soja."
+        "O indicador v1 reúne a falta de chuva frente à demanda de água do ar (ETo), "
+        "o vigor da vegetação (NDVI) e sua umidade (NDMI). É um indicador acadêmico "
+        "provisório de condições associadas à falta de água na soja."
     )
     st.write(
         "A máscara de soja é anual. Uma célula não necessariamente tem soja ativa em todas as "
@@ -555,13 +653,14 @@ def render_method(reader: DashboardReader) -> None:
     )
     st.caption(f"Método: {context['method']} · parâmetros: {context['parameters_origin']}")
     parameters = context["parameters"]
-    st.dataframe(
-        pd.DataFrame(
-            [{"Parâmetro": key, "Valor": str(value)} for key, value in parameters.items()]
-        ),
-        hide_index=True,
-        width="stretch",
-    )
+    with st.expander("Consultar os parâmetros técnicos"):
+        st.dataframe(
+            pd.DataFrame(
+                [{"Parâmetro": key, "Valor": str(value)} for key, value in parameters.items()]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
     if reader.source == "postgres":
         st.caption(
             "Os parâmetros acima são os configurados atualmente; o banco não armazena todos "
@@ -586,7 +685,10 @@ def main() -> None:
     st.html(CSS)
     settings = load_settings(args.config)
     st.title(PAGE_TITLE)
-    st.write("Região: Estado do Mato Grosso")
+    st.caption(
+        f"{settings.study.area_name} · {settings.study.start_date:%d/%m/%Y} a "
+        f"{settings.study.end_date:%d/%m/%Y} · Estudo acadêmico"
+    )
     with st.sidebar:
         st.subheader("Explorar os dados")
     source: DataSource = "postgres"
@@ -603,19 +705,20 @@ def main() -> None:
         weeks = reader.weeks()
         identity = reader.fingerprint() + str(settings.study.model_dump()) + settings.config_hash
         with st.sidebar:
-            week = st.select_slider(
-                "Semana",
-                options=weeks,
-                value=weeks[len(weeks) // 2],
-                format_func=lambda value: value.strftime("%d/%m/%Y"),
-            )
             section = st.radio(
                 "Visualização",
-                ["Visão geral", "Sobre o indicador"],
+                ["Todo o período", "Explorar uma semana", "Sobre o indicador"],
                 key="section",
             )
             bounds = None
-
+            week = None
+            if section == "Explorar uma semana":
+                week = st.select_slider(
+                    "Semana",
+                    options=weeks,
+                    value=weeks[-1],
+                    format_func=lambda value: value.strftime("%d/%m/%Y"),
+                )
             if st.button("Atualizar leitura", width="stretch"):
                 st.cache_data.clear()
                 st.rerun()
@@ -623,30 +726,34 @@ def main() -> None:
                 f"Período: {settings.study.start_date:%d/%m/%Y} a "
                 f"{settings.study.end_date:%d/%m/%Y}"
             )
-        with st.spinner("Lendo os indicadores da semana…"):
-            table = geographic_subset(cached_week(settings, source, identity, week), bounds)
-            summary = summarize(table)
-        if not table.num_rows:
-            st.info("Nenhuma célula disponível neste recorte geográfico.")
-            return
-        row = table.select(["week_end"]).slice(0, 1).to_pylist()[0]
-        st.caption(
-            f"SEMANA {max(week, settings.study.start_date):%d/%m/%Y} - "
-            f"{min(row['week_end'], settings.study.end_date):%d/%m/%Y}"
-        )
-        render_metrics(summary)
-        if section == "Visão geral":
+        if section == "Todo o período":
+            render_period(settings, source, identity, bounds)
+        elif section == "Explorar uma semana" and week is not None:
+            with st.spinner("Lendo os indicadores da semana…"):
+                table = geographic_subset(cached_week(settings, source, identity, week), bounds)
+                summary = summarize(table)
+            if not table.num_rows:
+                st.info("Nenhuma célula disponível neste recorte geográfico.")
+                return
+            row = table.select(["week_end"]).slice(0, 1).to_pylist()[0]
+            st.caption(
+                f"SEMANA {max(week, settings.study.start_date):%d/%m/%Y} — "
+                f"{min(row['week_end'], settings.study.end_date):%d/%m/%Y}"
+            )
+            render_metrics(summary)
             render_score_description()
             render_map(table, summary)
-            render_factors(summary)
-        elif section == "Evolução semanal":
-            render_evolution(settings, source, identity, bounds)
-        elif section == "Análise por célula":
-            render_cell(settings, source, identity, week)
+            with st.expander("Entender os fatores desta semana"):
+                render_factors(summary)
+            with st.expander("Consultar o histórico de um ponto do mapa"):
+                render_cell(settings, source, identity, week)
         else:
             render_method(reader)
         st.divider()
-        st.caption("Fontes: NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE.")
+        st.caption(
+            "Estudo exploratório: não mede perdas de produção nem prescreve irrigação. "
+            "Fontes: NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE."
+        )
     except (ValueError, OSError, RuntimeError, DatabaseError, pa.ArrowInvalid) as error:
         LOGGER.error(
             "Dashboard read failed",
