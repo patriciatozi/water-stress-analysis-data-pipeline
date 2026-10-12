@@ -11,6 +11,7 @@ COPY --chown=airflow:0 src ./src
 ENV UV_PROJECT_ENVIRONMENT=/opt/pipeline-venv
 RUN uv sync --frozen --no-dev --no-editable --group dashboard --python /usr/local/bin/python
 COPY --chown=airflow:0 dashboard_app.py ./
+COPY --chown=airflow:0 assets ./assets
 COPY --chown=airflow:0 .streamlit ./.streamlit
 COPY --chown=airflow:0 configs ./configs
 COPY --chown=airflow:0 migrations ./migrations

@@ -26,7 +26,7 @@ As seções de 10/10/2026 e os guias atuais prevalecem para o modo AWS/S3.
 | Entender o contexto e o público | Primeira tela responde à evolução do estudo, sem exigir conhecimento de siglas |
 | Escolher a representação | Linha mensal para comparar no tempo; barras para disponibilidade; mapa em uma visão semanal |
 | Reduzir elementos | Dois gráficos principais; tabela, fatores, histórico e detalhes em seções expansíveis |
-| Direcionar a atenção | Verde destaca o indicador; disponibilidade usa cinza; rótulos diretos nos valores mensais |
+| Direcionar a atenção | Azul escuro destaca o indicador; disponibilidade usa cinza; rótulos diretos nos valores mensais |
 | Construir uma narrativa | Primeiro a conclusão observada, depois evolução e disponibilidade, depois exploração e método |
 | Explicar sem exagerar | “Indicador”, “vigor” e “umidade”; escala 0–100 não é probabilidade de perda |
 
@@ -53,3 +53,15 @@ O [contrato mensal](dashboard.md#resumo-mensal-contrato-de-apresentação) regis
   ambiente padrão; Ruff, formatação e mypy aprovados.
 - A conexão com o navegador de inspeção ficou indisponível; revisão visual no navegador pendente.
   Não foi feita publicação na AWS. A atualização da imagem segue os comandos do guia do dashboard.
+
+## Identidade visual — 11/10/2026
+
+A pedido do usuário, a paleta principal passou para azul escuro, com área de leitura clara.
+A barra lateral reúne logo branco do PECE, nome completo
+“Estresse Hídrico e Recomendação de Irrigação na Soja” e, abaixo, “Explorar os dados”.
+As cores das classes de risco conservam seu significado. Origem do logo em
+[assets/README.md](../assets/README.md); regras de tema em [dashboard.md](dashboard.md#identidade-visual).
+
+Verificação: 251 testes aprovados, um módulo Airflow ignorado; Ruff, formatação e mypy aprovados.
+Imagem Docker reconstruída com os assets; logo, contraste, ordem dos elementos e gráficos
+conferidos em uma prévia com os Parquet locais. Prévia temporária encerrada.

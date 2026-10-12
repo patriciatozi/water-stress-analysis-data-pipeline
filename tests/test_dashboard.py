@@ -383,7 +383,7 @@ def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_week
     assert app.metric[0].value == "85,7"
     assert len(app.metric) == 5  # Three summary metrics plus NDVI and NDMI.
     assert app.metric[1].value == "2 km²"
-    assert app.title[0].value == "Sinais de risco hídrico na soja"
+    assert app.title[0].value == "Riscos hídricos para o cultivo da soja"
     assert not app.selectbox
     description = " ".join(item.proto.body for item in app.get("html"))
     assert "de 0 a 100" in description
@@ -444,10 +444,19 @@ def test_streamlit_navigation_and_metadata(dashboard_app_test) -> None:
     ]
     assert not app.select_slider
     assert not app.metric
-    assert len(app.get("plotly_chart")) == 3
+    assert len(app.get("plotly_chart")) == 2
     app.radio(key="section").set_value("Sobre o indicador").run()
     assert not app.exception
     assert len(app.dataframe) == 1
+    region_caption = app.main.caption[0]
+    assert "**.<br>**Período:**" in region_caption.value
+    assert region_caption.proto.allow_html
+    footer_caption = app.main.caption[-1]
+    assert footer_caption.value == (
+        "**Estudo exploratório:** não mede perdas de produção nem prescreve irrigação.<br>"
+        "**Fontes:** NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE."
+    )
+    assert footer_caption.proto.allow_html
 
 
 def test_streamlit_empty_gold_has_actionable_message(
@@ -654,3 +663,17 @@ def test_evolution_all_null_scores_keep_numeric_schema(dashboard_data: Settings)
     assert evolution.schema.field("score").type == pa.float64()
     assert evolution["score"].to_pylist() == [None, None]
     assert summarize_months(evolution, date(2023, 9, 1), date(2023, 9, 30))[0].score is None
+
+
+def test_sidebar_course_identity_precedes_navigation(dashboard_app_test) -> None:
+    app = dashboard_app_test
+    brand = next(
+        item.proto.body for item in app.sidebar.get("html") if "sidebar-brand" in item.proto.body
+    )
+    project_name = "Estresse Hídrico e Recomendação de Irrigação na Soja"
+    assert 'alt="PECE - Programa de Educação Continuada, Escola Politécnica da USP"' in brand
+    assert 'src="data:image/png;base64,' in brand
+    assert brand.index("<img") < brand.index(project_name)
+    assert app.sidebar.subheader[0].value == "Explorar os dados"
+    assert app.title[0].value == "Riscos hídricos para o cultivo da soja"
+    assert not app.exception

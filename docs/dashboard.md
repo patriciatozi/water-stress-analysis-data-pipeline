@@ -52,6 +52,25 @@ Silver ou Gold. Alterações na interface, tema, código ou dependências exigem
 imagem e recriar o serviço com `up -d --build dashboard`. O healthcheck verifica o servidor
 Streamlit; a disponibilidade dos dados é informada na própria interface.
 
+## Identidade visual
+
+O tema usa azul escuro na barra lateral e nos destaques, com fundo claro na área de leitura.
+As cores ficam em `.streamlit/config.toml`; linha principal e destaques usam a cor primária
+configurada. As cores das classes de risco mantêm seu significado no mapa e na distribuição.
+
+No topo da barra lateral: logo branco do PECE, nome
+**Estresse Hídrico e Recomendação de Irrigação na Soja**, depois **Explorar os dados**.
+O título da área analítica continua “Sinais de risco hídrico na soja”; o nome do projeto não
+altera o caráter acadêmico do indicador nem acrescenta prescrições de irrigação.
+
+`assets/pece-logo.png` preserva transparência e proporções, tem descrição acessível e é
+incorporado localmente, inclusive no Docker. Origem em [assets/README.md](../assets/README.md).
+Para aplicar o novo tema/logo no serviço existente, reconstrua somente o dashboard:
+
+```bash
+docker compose --env-file .env.airflow -f compose.airflow.yml up -d --build --no-deps dashboard
+```
+
 ## Leitura do PostgreSQL
 
 Por padrão (`WATER_STRESS_DASHBOARD__SOURCE=postgres`), o dashboard lê os indicadores pela
@@ -123,7 +142,7 @@ A seleção semanal usa somente semanas disponíveis na fonte selecionada. O int
 as bordas do estudo. Os valores ausentes permanecem nulos, sem interpolação.
 
 O mapa usa centróides em EPSG:4326. O filtro **Categorias** reúne as classes
-(verde) e a completude Completo/Parcial (amarelo). Classes selecionadas se combinam com a
+(azul) e a completude Completo/Parcial (amarelo). Classes selecionadas se combinam com a
 completude selecionada; sem escolha de completude, todas as condições são exibidas. Escolher
 apenas uma completude exibe todas as classes nessa condição. O mapa, sua legenda de áreas e o
 gráfico **Como a área se distribui?** usam exatamente as mesmas células filtradas. Sem score e classificação

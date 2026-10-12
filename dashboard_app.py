@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
 from datetime import date
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +34,9 @@ from water_stress.dashboard.s3_cache import DashboardStorageSettings, fetch_dash
 from water_stress.transformation import gold_weekly
 
 LOGGER = logging.getLogger(__name__)
-PAGE_TITLE = "Sinais de risco hídrico na soja"
+PAGE_TITLE = "Riscos hídricos para o cultivo da soja"
+PROJECT_NAME = "Estresse Hídrico e Recomendação de Irrigação na Soja"
+COURSE_LOGO = Path(__file__).resolve().parent / "assets" / "pece-logo.png"
 MONTH_NAMES = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 MAP_RISK_LABELS = {
     key: label for key, label in RISK_LABELS.items() if key not in ("pending", "missing")
@@ -59,19 +63,28 @@ CSS = """
 <style>
 .block-container {max-width: 1480px; padding-top: 2rem; padding-bottom: 2rem;}
 h1 {letter-spacing: -.045em; font-weight: 650 !important;}
+h1, h2, h3 {color: var(--dashboard-primary);}
+[data-testid="stSidebar"] :is(h1, h2, h3) {color: inherit;}
 h2, h3 {letter-spacing: -.025em;}
-[data-testid="stMetric"] {background: white; border: 1px solid #e3e9ed;
+[data-testid="stMetric"] {background: white; border: 1px solid #dce5ef;
     border-radius: 14px; padding: 18px 20px; min-height: 130px;}
 [data-testid="stMetricValue"] {font-size: 2rem; letter-spacing: -.03em;}
-[data-testid="stSidebar"] {border-right: 1px solid #e3e9ed;}
+[data-testid="stSidebar"] {border-right: 1px solid #dce5ef;}
+.sidebar-brand {padding-bottom: 24px; margin-bottom: 6px;
+    border-bottom: 1px solid #ffffff30;}
+.sidebar-brand img {display: block; width: 224px; max-width: 100%; height: auto;
+    margin-bottom: 24px;}
+.sidebar-brand h2 {font-size: 1.15rem !important; line-height: 1.45;
+    font-weight: 600 !important; letter-spacing: -.01em; margin: 0; padding: 0;}
 div[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]) {
-    background-color: #24745a !important; color: white !important;}
+    background-color: var(--dashboard-primary) !important; color: white !important;}
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]):has([title="Completo"]),
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]):has([title="Parcial"]) {
     background-color: #f4d46f !important; color: #594514 !important;}
 .st-key-map_categories :is([data-tag], [data-baseweb="tag"]) button {color: inherit !important;}
-.score-description {background: #f0f5f3; color: #233548; border-radius: 8px;
+.score-description {background: var(--dashboard-soft); color: var(--dashboard-text);
+    border-radius: 8px;
     padding: 16px; margin-bottom: 0; font-size: 1rem; line-height: 1.6;}
 .score-description p {margin: 16px 0 0;}
 .score-term {position: relative; display: inline-block;
@@ -80,7 +93,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
 .score-term [role="tooltip"] {visibility: hidden; opacity: 0; position: absolute;
     bottom: calc(100% + 8px); left: 0; z-index: 100;
     width: 260px; max-width: 75vw; padding: 10px 12px; border-radius: 8px;
-    background: #233548; color: white; font-size: .875rem; line-height: 1.4;
+    background: var(--dashboard-text); color: white; font-size: .875rem; line-height: 1.4;
     font-weight: normal; box-shadow: 0 4px 12px #23354826; pointer-events: none;}
 .score-term:hover [role="tooltip"], .score-term:focus [role="tooltip"] {
     visibility: visible; opacity: 1;}
@@ -91,6 +104,18 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
 }
 </style>
 """
+
+
+def render_sidebar_brand() -> None:
+    logo = base64.b64encode(COURSE_LOGO.read_bytes()).decode("ascii")
+    st.html(
+        '<div class="sidebar-brand">'
+        f'<img src="data:image/png;base64,{logo}" '
+        'alt="PECE - Programa de Educação Continuada, Escola Politécnica da USP" '
+        'width="224" height="91">'
+        f"<h2>{PROJECT_NAME}</h2>"
+        "</div>"
+    )
 
 
 def number(value: float | None, decimals: int = 1, suffix: str = "") -> str:
@@ -146,7 +171,7 @@ def style_chart(figure: go.Figure, height: int = 280, y_title: str | None = None
         margin=dict(l=0, r=8, t=12, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Arial, sans-serif", size=12, color="#536578"),
+        font=dict(family="Arial, sans-serif", size=12, color="#526881"),
         legend=dict(orientation="h", y=-0.2),
         hovermode="x unified",
         yaxis_title=y_title,
@@ -162,8 +187,9 @@ def line_chart(
     *,
     scale: float = 1,
     y_title: str | None = None,
-    colors: tuple[str, ...] = ("#24745a", "#558bb8", "#dba44a"),
+    colors: tuple[str, ...] | None = None,
 ) -> go.Figure:
+    colors = colors or (st.get_option("theme.primaryColor"), "#558bb8", "#dba44a")
     figure = go.Figure()
     for color, (column, label) in zip(colors, columns.items(), strict=False):
         figure.add_trace(
@@ -222,22 +248,22 @@ def render_score_description() -> None:
     st.html("""
         <div class="score-description">
             <strong>O que este indicador mostra?</strong>
-            <p>Reúne sinais do clima e de imagens de satélite em uma escala de 0 a 100.
-            Valores maiores indicam condições mais associadas à falta de água.
-            Não é uma porcentagem de chance de perda da produção.</p>
+            <p>Reúne sinais do clima e de imagens de satélite para compor uma escala de 0 a 100.
+            Valores <b>maiores</b> indicam condições mais associadas à <b>falta de água</b>.
+            <br>Não é uma porcentagem de chance de perda da produção.</p>
         </div>
     """)
     with st.expander("Como o indicador é composto?"):
         st.html("""
-            <p>Combina a falta de chuva frente à demanda atmosférica de água
+            <p>Combina a falta de chuva frente à <b>demanda atmosférica de água</b>
             (<span class="score-term" tabindex="0" aria-describedby="eto-description">ETo<span
                 role="tooltip" id="eto-description">Água que uma vegetação de referência
                 perderia para o ar por evaporação e transpiração.</span></span>),
-            o vigor da vegetação
+            o <b>vigor da vegetação</b>
             (<span class="score-term" tabindex="0" aria-describedby="ndvi-description">NDVI<span
                 role="tooltip" id="ndvi-description">Indica o vigor e a cobertura da vegetação
                 a partir de imagens de satélite.</span></span>)
-            e sua umidade
+            e sua <b>umidade</b>
             (<span class="score-term" tabindex="0" aria-describedby="ndmi-description">NDMI<span
                 role="tooltip" id="ndmi-description">Indica a umidade da vegetação a partir
                 de imagens de satélite.</span></span>);
@@ -256,7 +282,7 @@ def render_map(table: pa.Table, summary: WeeklySummary) -> None:
             format_func=MAP_CATEGORY_LABELS.get,
             key="map_categories",
             help=(
-                "Classes em verde; completude em amarelo. As classes escolhidas são combinadas "
+                "Classes em azul; completude em amarelo. As classes escolhidas são combinadas "
                 "com Completo/Parcial quando selecionados. Sem filtro de completude, "
                 "todas as condições são exibidas."
             ),
@@ -382,7 +408,7 @@ def render_factors(summary: WeeklySummary) -> None:
             go.Bar(
                 x=[FACTOR_LABELS[name] for name in columns],
                 y=[summary.factors[name] for name in columns],
-                marker_color=["#558bb8", "#8ca899", "#dba44a"],
+                marker_color=["#558bb8", "#8cabc9", "#dba44a"],
             )
         )
         st.plotly_chart(
@@ -439,11 +465,7 @@ def render_period(
             st.write(f"**Os meses com dados têm a mesma média: {number(peak_score)} pontos.**")
         else:
             labels = ", ".join(month_label(month.month) for month in ties)
-            st.write(f"**Maior indicador médio em {labels}: {number(peak_score)} pontos.**")
-        st.caption(
-            "A comparação descreve os dados disponíveis. Mudanças nos componentes disponíveis "
-            "também podem alterar o indicador."
-        )
+            st.write(f"Maior indicador médio em {labels}: **{number(peak_score)} pontos.**")
     render_score_description()
     labels = [month_label(month.month) for month in months]
     left, right = st.columns([1.6, 1], gap="large")
@@ -458,7 +480,7 @@ def render_period(
                     number(None if month.score is None else month.score * 100) for month in months
                 ],
                 textposition="top center",
-                line=dict(color="#24745a", width=3),
+                line=dict(color=st.get_option("theme.primaryColor"), width=3),
                 marker=dict(size=8),
                 connectgaps=False,
                 hovertemplate="%{x}: %{y:.1f} pontos<extra></extra>",
@@ -471,7 +493,8 @@ def render_period(
             config={"displayModeBar": False},
         )
         st.caption(
-            "Média dos resultados semanais, ponderada pela área de soja e pelos dias no mês."
+            "Média dos resultados semanais, ponderada pela **área de soja** "
+            "e pelos **dias no mês**."
         )
     with right, st.container(border=True):
         st.markdown("**Quanto da área tem os três componentes?**")
@@ -479,7 +502,7 @@ def render_period(
             go.Bar(
                 x=labels,
                 y=[month.complete_coverage_pct for month in months],
-                marker_color="#8c9ba5",
+                marker_color="#112B49",
                 text=[number(month.complete_coverage_pct, 0, "%") for month in months],
                 textposition="outside",
                 cliponaxis=False,
@@ -493,13 +516,8 @@ def render_period(
             config={"displayModeBar": False},
         )
         st.caption(
-            "Três componentes: clima, vigor e umidade da vegetação. Completude não é precisão."
+            "**Três componentes:** clima, vigor e umidade da vegetação. Completude não é precisão."
         )
-    st.caption(
-        "Lacunas representam ausência de dados. Os meses são resumos de semanas, "
-        "não medições diárias nem novas classificações de risco."
-    )
-    st.caption("A identificação de soja é anual e não confirma cultivo ativo em cada mês.")
     if any(month.available_days < month.expected_days for month in months):
         st.info(
             "Há meses com semanas ausentes ou sem células. As médias usam apenas os dias "
@@ -529,16 +547,15 @@ def render_period(
             width="stretch",
         )
         st.caption(
-            "Percentuais são médias ponderadas por área e dias nas semanas disponíveis. "
-            "Alto/crítico usa somente a área com classe publicada. A mesma área não é somada "
-            "como hectares novos a cada semana."
+            "Percentuais são **médias ponderadas por área e dias nas semanas disponíveis**. \n"
+            "Alto/crítico usa somente a **área com classe publicada**."
         )
-    with st.expander("Ver a evolução semana a semana"):
-        data = period_data(evolution, settings)
-        figure = line_chart(data, {"score": "Indicador médio"}, scale=100, y_title="0 a 100")
-        figure.update_yaxes(range=[0, 100])
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
-        st.caption("Semanas sem publicação ficam vazias. Não há interpolação.")
+    with st.expander("Observações importantes"):
+        st.caption(
+            "Lacunas representam ausência de dados. Os meses são resumos de semanas, "
+            "não medições diárias nem novas classificações de risco."
+        )
+        st.caption("A identificação de soja é anual e não confirma cultivo ativo em cada mês.")
 
 
 def render_cell(settings: Settings, source: DataSource, identity: str, week: date) -> None:
@@ -606,7 +623,7 @@ def render_cell(settings: Settings, source: DataSource, identity: str, week: dat
                     "water_deficit_mm_7d": "Déficit",
                 },
                 y_title="mm na janela",
-                colors=("#558bb8", "#8ca899", "#dba44a"),
+                colors=("#558bb8", "#8cabc9", "#dba44a"),
             ),
             width="stretch",
         )
@@ -682,14 +699,23 @@ def main() -> None:
     args = parser.parse_args()
     load_dotenv(Path(".env"), override=False)
     st.set_page_config(page_title=PAGE_TITLE, page_icon="🌿", layout="wide")
-    st.html(CSS)
+    st.html(
+        "<style>:root {"
+        f"--dashboard-primary: {st.get_option('theme.primaryColor')};"
+        f"--dashboard-soft: {st.get_option('theme.secondaryBackgroundColor')};"
+        f"--dashboard-text: {st.get_option('theme.textColor')};"
+        "}</style>" + CSS
+    )
     settings = load_settings(args.config)
     st.title(PAGE_TITLE)
     st.caption(
-        f"{settings.study.area_name} · {settings.study.start_date:%d/%m/%Y} a "
-        f"{settings.study.end_date:%d/%m/%Y} · Estudo acadêmico"
+        f"**Período:** {settings.study.start_date:%d/%m/%Y} a "
+        f"{settings.study.end_date:%d/%m/%Y}.<br>"
+        f"**Região:** Estado do **{escape(settings.study.area_name)}**.",
+        unsafe_allow_html=True,
     )
     with st.sidebar:
+        render_sidebar_brand()
         st.subheader("Explorar os dados")
     source: DataSource = "postgres"
     storage: DashboardStorageSettings | None = None
@@ -745,14 +771,13 @@ def main() -> None:
             render_map(table, summary)
             with st.expander("Entender os fatores desta semana"):
                 render_factors(summary)
-            with st.expander("Consultar o histórico de um ponto do mapa"):
-                render_cell(settings, source, identity, week)
         else:
             render_method(reader)
         st.divider()
         st.caption(
-            "Estudo exploratório: não mede perdas de produção nem prescreve irrigação. "
-            "Fontes: NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE."
+            "**Estudo exploratório:** não mede perdas de produção nem prescreve irrigação.<br>"
+            "**Fontes:** NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE.",
+            unsafe_allow_html=True,
         )
     except (ValueError, OSError, RuntimeError, DatabaseError, pa.ArrowInvalid) as error:
         LOGGER.error(
