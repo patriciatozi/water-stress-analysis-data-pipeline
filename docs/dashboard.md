@@ -127,7 +127,17 @@ O público principal é o público geral e a banca acadêmica. A pergunta da pri
 
 “Score” é apresentado como “indicador”. A escala 0–100 não é probabilidade de perda da produção.
 Em **Como o indicador é composto?**, ETo, NDVI e NDMI aparecem junto a explicações em linguagem
-simples e têm detalhes ao passar o mouse ou focar as siglas com o teclado.
+simples e têm detalhes ao passar o mouse ou focar as siglas com o teclado. Ao final dessa
+seção, o botão **Ver detalhes em Sobre o indicador** abre as premissas e limitações do método
+e atualiza a seleção na barra lateral.
+
+Na visão semanal, **Como ler as faixas de risco?** fica visível antes do mapa e do gráfico de
+distribuição. A legenda usa as mesmas cores desses elementos e os limites da política
+`four-level-v1`: baixo de 0 a 25; atenção acima de 25 até 50; alto acima de 50 até 75;
+crítico acima de 75 até 100. O limite superior pertence à faixa; a classificação usa o valor
+original, antes do arredondamento. O indicador médio no topo resume a área, enquanto as
+classes descrevem cada ponto da grade. Os limites são provisórios e ainda não têm validação
+agronômica. A mesma legenda aparece em **Sobre o indicador**.
 
 A organização aplica contexto, redução de elementos e foco visual de
 [Storytelling with Data](https://www.storytellingwithdata.com/blog/two-tips-for-better-graphs).

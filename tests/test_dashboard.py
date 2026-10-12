@@ -435,6 +435,35 @@ def test_streamlit_overview_and_map_filters_preserve_denominators(dashboard_week
     assert app.metric[0].value == "85,7"
 
 
+@pytest.mark.parametrize("section", ["Explorar uma semana", "Sobre o indicador"])
+def test_risk_scale_explains_intervals_and_matches_chart_colors(
+    dashboard_app_test, section: str
+) -> None:
+    app = dashboard_app_test.radio(key="section").set_value(section).run()
+    assert not app.exception
+    legend = next(
+        item.proto.body for item in app.main.get("html") if 'class="risk-scale"' in item.proto.body
+    )
+    expected = [
+        ("Baixo", "0 a 25", "#31936e"),
+        ("Atenção", "Acima de 25 até 50", "#e7b848"),
+        ("Alto", "Acima de 50 até 75", "#e48243"),
+        ("Crítico", "Acima de 75 até 100", "#c4535c"),
+    ]
+    for label, interval, color in expected:
+        assert f"<strong>{label}</strong><p>{interval}</p>" in legend
+        assert f"border-top-color: {color};" in legend
+    assert any("antes do arredondamento" in caption.value for caption in app.main.caption)
+    assert any("ainda sem validação agronômica" in caption.value for caption in app.main.caption)
+    if section == "Explorar uma semana":
+        headings = [heading.value for heading in app.subheader]
+        assert headings.index("Como ler as faixas de risco?") < headings.index(
+            "Onde estão os sinais de risco nesta semana?"
+        )
+        chart = json.loads(app.get("plotly_chart")[0].proto.spec)["data"][0]
+        assert chart["marker"]["color"] == [color for _, _, color in expected]
+
+
 def test_streamlit_navigation_and_metadata(dashboard_app_test) -> None:
     app = dashboard_app_test
     assert app.radio(key="section").options == [
@@ -449,7 +478,9 @@ def test_streamlit_navigation_and_metadata(dashboard_app_test) -> None:
     assert not app.exception
     assert len(app.dataframe) == 1
     region_caption = app.main.caption[0]
-    assert "**.<br>**Período:**" in region_caption.value
+    assert region_caption.value.count("<br>") == 1
+    assert "**Região:**" in region_caption.value
+    assert "**Período:**" in region_caption.value
     assert region_caption.proto.allow_html
     footer_caption = app.main.caption[-1]
     assert footer_caption.value == (
@@ -457,6 +488,19 @@ def test_streamlit_navigation_and_metadata(dashboard_app_test) -> None:
         "**Fontes:** NASA POWER, Sentinel-2, SoilGrids, MapBiomas e IBGE."
     )
     assert footer_caption.proto.allow_html
+
+
+@pytest.mark.parametrize("section", ["Todo o período", "Explorar uma semana"])
+def test_score_composition_button_opens_indicator_method(dashboard_app_test, section: str) -> None:
+    app = dashboard_app_test.radio(key="section").set_value(section).run()
+    composition = next(
+        expander for expander in app.expander if expander.label == "Como o indicador é composto?"
+    )
+    composition.button(key="open_indicator_method").click().run()
+    assert not app.exception
+    assert app.radio(key="section").value == "Sobre o indicador"
+    assert len(app.dataframe) == 1
+    assert all(button.key != "open_indicator_method" for button in app.button)
 
 
 def test_streamlit_empty_gold_has_actionable_message(

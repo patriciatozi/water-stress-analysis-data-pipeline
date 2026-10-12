@@ -31,6 +31,7 @@ from water_stress.dashboard.analysis import (
 )
 from water_stress.dashboard.data import DashboardReader, DataSource
 from water_stress.dashboard.s3_cache import DashboardStorageSettings, fetch_dashboard
+from water_stress.risk_classification import RISK_CLASSIFICATION_POLICY
 from water_stress.transformation import gold_weekly
 
 LOGGER = logging.getLogger(__name__)
@@ -98,6 +99,13 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {border-radius: 14px;}
 .score-term:hover [role="tooltip"], .score-term:focus [role="tooltip"] {
     visibility: visible; opacity: 1;}
 #eto-description {left: auto; right: 0;}
+.risk-scale {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;}
+.risk-band {background: white; border: 1px solid #dce5ef; border-top: 4px solid;
+    border-radius: 8px; padding: 10px 14px; color: var(--dashboard-text);}
+.risk-band p {margin: 4px 0 0; font-size: .95rem;}
+@media (max-width: 700px) {
+    .risk-scale {grid-template-columns: repeat(2, minmax(0, 1fr));}
+}
 @media (max-width: 1400px) {
     .score-term [role="tooltip"], #eto-description {position: fixed;
         bottom: 24px; left: 50%; right: auto; transform: translateX(-50%);}
@@ -214,7 +222,7 @@ def period_data(table: pa.Table, settings: Settings) -> pd.DataFrame:
 def render_metrics(summary: WeeklySummary) -> None:
     score, high, complete = st.columns(3)
     score.metric(
-        "Indicador médio · 0 a 100",
+        "Indicador médio - 0 a 100",
         number(None if summary.score is None else summary.score * 100),
         help=(
             "Média ponderada pela área de soja com score. Pode combinar completos e parciais; "
@@ -231,7 +239,8 @@ def render_metrics(summary: WeeklySummary) -> None:
             " km²",
         ),
         help=(
-            "Soma da área equivalente de soja nas classes Gold alto e crítico. "
+            "Soma da área equivalente de soja nas classes de alto e crítico "
+            "para o estresse hídrico. "
             "Não é área com dano observado."
         ),
     )
@@ -244,13 +253,18 @@ def render_metrics(summary: WeeklySummary) -> None:
     )
 
 
+def open_indicator_method() -> None:
+    st.session_state["section"] = "Sobre o indicador"
+
+
 def render_score_description() -> None:
     st.html("""
         <div class="score-description">
             <strong>O que este indicador mostra?</strong>
-            <p>Reúne sinais do clima e de imagens de satélite para compor uma escala de 0 a 100.
-            Valores <b>maiores</b> indicam condições mais associadas à <b>falta de água</b>.
-            <br>Não é uma porcentagem de chance de perda da produção.</p>
+            <p>Reúne fatores relacionados ao clima e de imagens de satélite para compor um
+            <b>índice de estresse hídrico com escala de 0 a 100</b>.<br>
+            <b>Maiores valores</b> indicam condições mais associadas à <b>falta de água</b>
+            naquele determinado período e região.
         </div>
     """)
     with st.expander("Como o indicador é composto?"):
@@ -269,7 +283,35 @@ def render_score_description() -> None:
                 de imagens de satélite.</span></span>);
             resultados parciais usam os fatores disponíveis.</p>
         """)
+        st.button(
+            "Ver detalhes na seção **Sobre o indicador**",
+            key="open_indicator_method",
+            on_click=open_indicator_method,
+        )
 
+
+def render_risk_scale() -> None:
+    st.subheader("Como ler as faixas de risco?")
+    cards = []
+    lower_score = 0.0
+    for index, band in enumerate(RISK_CLASSIFICATION_POLICY.bands):
+        upper_score = band.upper_score * 100
+        interval = (
+            f"0 a {upper_score:g}"
+            if index == 0
+            else f"Acima de {lower_score:g} até {upper_score:g}"
+        )
+        color = RISK_COLORS[band.risk_class.value]
+        cards.append(
+            f'<div class="risk-band" role="listitem" style="border-top-color: {color};">'
+            f"<strong>{escape(band.label)}</strong><p>{interval}</p></div>"
+        )
+        lower_score = upper_score
+    st.html(
+        '<div class="risk-scale" role="list" aria-label="Faixas do indicador na escala de 0 a 100">'
+        + "".join(cards)
+        + "</div>"
+    )
 
 def render_map(table: pa.Table, summary: WeeklySummary) -> None:
     left, right = st.columns([2.15, 1], gap="large")
@@ -480,7 +522,7 @@ def render_period(
                     number(None if month.score is None else month.score * 100) for month in months
                 ],
                 textposition="top center",
-                line=dict(color=st.get_option("theme.primaryColor"), width=3),
+                line=dict(color="#dba44a", width=3),
                 marker=dict(size=8),
                 connectgaps=False,
                 hovertemplate="%{x}: %{y:.1f} pontos<extra></extra>",
@@ -488,7 +530,7 @@ def render_period(
         )
         figure.update_yaxes(range=[0, 110], tickvals=[0, 25, 50, 75, 100])
         st.plotly_chart(
-            style_chart(figure, height=310, y_title="Indicador médio · 0 a 100"),
+            style_chart(figure, height=310, y_title="Indicador médio - 0 a 100"),
             width="stretch",
             config={"displayModeBar": False},
         )
@@ -515,9 +557,7 @@ def render_period(
             width="stretch",
             config={"displayModeBar": False},
         )
-        st.caption(
-            "**Três componentes:** clima, vigor e umidade da vegetação. Completude não é precisão."
-        )
+        st.caption("**Três componentes:** clima, vigor e umidade da vegetação.")
     if any(month.available_days < month.expected_days for month in months):
         st.info(
             "Há meses com semanas ausentes ou sem células. As médias usam apenas os dias "
@@ -547,15 +587,18 @@ def render_period(
             width="stretch",
         )
         st.caption(
-            "Percentuais são **médias ponderadas por área e dias nas semanas disponíveis**. \n"
-            "Alto/crítico usa somente a **área com classe publicada**."
+            "Percentuais são **médias ponderadas por área e dias nas semanas disponíveis**.<br>"
+            "Alto/crítico usa somente a **área com classe publicada**.",
+            unsafe_allow_html=True,
         )
     with st.expander("Observações importantes"):
         st.caption(
-            "Lacunas representam ausência de dados. Os meses são resumos de semanas, "
-            "não medições diárias nem novas classificações de risco."
+            "Lacunas representam **ausência de dados**. <br>"
+            "Os meses são **resumos de semanas**, não medições diárias "
+            "nem novas classificações de risco.",
+            unsafe_allow_html=True,
         )
-        st.caption("A identificação de soja é anual e não confirma cultivo ativo em cada mês.")
+        st.caption("A identificação de soja é **anual** e não confirma cultivo ativo em cada mês.")
 
 
 def render_cell(settings: Settings, source: DataSource, identity: str, week: date) -> None:
@@ -657,9 +700,8 @@ def render_method(reader: DashboardReader) -> None:
         "renormalizados. Sem clima completo, o score fica indisponível. Score zero é válido. "
         "Os valores nulos permanecem ausentes nos gráficos."
     )
+    render_risk_scale()
     st.write(
-        "As classes vêm da Gold, antes do arredondamento: baixo até 25; atenção acima de 25 "
-        "até 50; alto acima de 50 até 75; crítico acima de 75 até 100. "
         "O mapa e a área por classe exibem somente células com classificação publicada. "
         "Os demais indicadores usam os valores numéricos disponíveis no período."
     )
@@ -710,8 +752,8 @@ def main() -> None:
     st.title(PAGE_TITLE)
     st.caption(
         f"**Período:** {settings.study.start_date:%d/%m/%Y} a "
-        f"{settings.study.end_date:%d/%m/%Y}.<br>"
-        f"**Região:** Estado do **{escape(settings.study.area_name)}**.",
+        f"{settings.study.end_date:%d/%m/%Y}<br>"
+        f"**Região:** Estado do **{escape(settings.study.area_name)}**",
         unsafe_allow_html=True,
     )
     with st.sidebar:
@@ -733,12 +775,12 @@ def main() -> None:
         with st.sidebar:
             section = st.radio(
                 "Visualização",
-                ["Todo o período", "Explorar uma semana", "Sobre o indicador"],
+                ["Visão geral", "Explorar por semana", "Sobre o indicador"],
                 key="section",
             )
             bounds = None
             week = None
-            if section == "Explorar uma semana":
+            if section == "Explorar por semana":
                 week = st.select_slider(
                     "Semana",
                     options=weeks,
@@ -749,12 +791,12 @@ def main() -> None:
                 st.cache_data.clear()
                 st.rerun()
             st.caption(
-                f"Período: {settings.study.start_date:%d/%m/%Y} a "
+                f"**Período:** {settings.study.start_date:%d/%m/%Y} a "
                 f"{settings.study.end_date:%d/%m/%Y}"
             )
-        if section == "Todo o período":
+        if section == "Visão geral":
             render_period(settings, source, identity, bounds)
-        elif section == "Explorar uma semana" and week is not None:
+        elif section == "Explorar por semana" and week is not None:
             with st.spinner("Lendo os indicadores da semana…"):
                 table = geographic_subset(cached_week(settings, source, identity, week), bounds)
                 summary = summarize(table)
@@ -768,6 +810,7 @@ def main() -> None:
             )
             render_metrics(summary)
             render_score_description()
+            render_risk_scale()
             render_map(table, summary)
             with st.expander("Entender os fatores desta semana"):
                 render_factors(summary)
